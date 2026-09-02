@@ -1,0 +1,27 @@
+# Environments
+venv/
+env/
+__pycache__/
+*.pyc
+.env
+
+# Model artifacts — regenerable; the engine is hardware-specific
+*.pt
+*.onnx
+*.engine
+
+# Test data
+data/*.mp4
+data/*.avi
+data/coco/
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# NOTE: results/ is deliberately NOT ignored.
+# The CSVs are a deliverable — see README.

@@ -128,6 +128,7 @@ def run(args, cfg):
         "power_mode": args.power_mode,
         "clocks_locked": args.clocks_locked,
         "fan": args.fan,
+        "host_profile": args.host_profile,
     }
     cfg_hash = config_hash(cfg_fields)
 
@@ -254,6 +255,7 @@ def run(args, cfg):
         "power_mode": args.power_mode,
         "clocks_locked": args.clocks_locked,
         "fan": args.fan,
+        "host_profile": args.host_profile,
 
         "warmup_frames": args.warmup,
         "n_frames": n,
@@ -350,6 +352,10 @@ def main():
     p.add_argument("--power-mode", dest="power_mode", default=None)
     p.add_argument("--clocks-locked", dest="clocks_locked", default="false")
     p.add_argument("--fan", default="true")
+    p.add_argument("--host-profile", dest="host_profile", default="unknown",
+                   help="host power/performance state, e.g. best-performance, "
+                        "whisper, jetson-10w. Part of the config hash: the same "
+                        "code on the same GPU differs 5x between profiles.")
     p.add_argument("--results-dir", dest="results_dir", default="results")
     p.add_argument("--notes", default="")
     args = p.parse_args()

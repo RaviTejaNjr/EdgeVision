@@ -1,0 +1,26 @@
+model:
+  name: yolov5nu
+  weights: models/yolov5nu.pt
+  onnx: models/yolov5nu.onnx
+  input_res: 640
+  opset: 13
+
+engine:
+  precision: fp16          # fp32 | fp16
+  workspace_mb: 256        # keep low — 2GB board
+
+runtime:
+  source: data/test_video.mp4
+  conf_threshold: 0.25
+  nms_iou: 0.45
+
+benchmark:
+  warmup_frames: 50
+  duration_s: 600
+  power_mode: 10W          # 10W | 5W
+  clocks_locked: true
+  fan: true
+
+evaluation:
+  coco_val_images: 500
+  map_regression_threshold: 0.01   # CI fails beyond this drop

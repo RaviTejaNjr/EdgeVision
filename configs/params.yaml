@@ -4,6 +4,7 @@ model:
   onnx: models/yolov5nu.onnx
   input_res: 640
   opset: 13
+  engine: models/yolov5nu_fp16.engine
 
 engine:
   precision: fp16          # fp32 | fp16

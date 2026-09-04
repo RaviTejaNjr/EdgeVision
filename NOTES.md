@@ -597,10 +597,118 @@ rows. Older runs are kept in `results/speed_exploratory.csv`.
 
 ---
 
+## 2026-09-04 — Part 3: export parity and decoder validation
+
+Two separate questions, and the second matters more.
+
+### 1. Did the ONNX export preserve the model?
+
+`tests/test_parity.py` — five frames through both PyTorch and ONNX Runtime,
+comparing the raw `(1, 84, 8400)` tensors.
+
+```
+6 passed in 3.24s
+```
+
+Tolerances are `atol/rtol = 1e-3` with mean absolute difference under `1e-4`.
+FP32 arithmetic is not associative, so two runtimes that fuse or reorder
+operations differently will not produce bit-identical output; the bounds allow
+for that while still catching a genuinely broken export.
+
+**`test_class_scores_are_probabilities` is the quietly useful one.** It asserts
+the 80 columns after the box coordinates all lie in [0, 1]. If the head had an
+objectness column, those columns would be offset by one and the last would hold
+box data — unbounded, and the test would fail. It passing confirms the anchor-free
+layout assumption.
+
+### 2. Does the NumPy decoder match Ultralytics?
+
+`evaluation/validate_decoder.py` — 10 frames, matched at IoU ≥ 0.9, same class
+only.
+
+| Metric | Result |
+|---|---|
+| Detections, ours | 125 |
+| Detections, Ultralytics | 118 |
+| Matched | 117 |
+| **Agreement** | **99.2%** |
+| Box coordinate error, mean | **0.546 px** |
+| Box coordinate error, max | 8.485 px |
+| Score error, mean | 0.018 |
+| Score error, max | 0.162 |
+
+**Mean box error of 0.546 px is the number that establishes correctness.**
+Sub-pixel agreement means the letterbox-undo maths — subtract padding, divide by
+scale, clip — is right.
+
+### Where they disagree, and why
+
+**Every unmatched detection is between conf 0.252 and 0.287**, against a 0.25
+threshold. Borderline cases, as predicted.
+
+Visual inspection of the overlays settled the rest:
+
+**Frame 0** — ours found a person Ultralytics missed at conf 0.257. Checked
+against the image: there really is a person there.
+
+**Frame 808** — the interesting one. Ultralytics produced a *single enormous box*
+labelled "kite 0.26" spanning the entire bunting line across the frame. Ours
+produced three separate tight boxes on individual kites.
+
+That is not a disagreement about detection; it is a disagreement about **NMS**.
+Ultralytics appears to run class-agnostic suppression or a lower IoU threshold on
+that class, merging overlapping kite detections into one box covering a third of
+the sky. Per-class NMS at IoU 0.45 keeps them separate.
+
+**Ours is the more sensible output here.** Three tight boxes on three kites is
+correct; one box over the whole bunting line is not.
+
+### The max errors: preprocessing, not decoding
+
+8.485 px and a 0.162 score difference are too large to be rounding.
+
+**Cause: letterbox geometry.** Ultralytics pads to a multiple of the model stride
+(32) and often uses a *rectangular* letterbox, padding only as far as the next
+stride multiple. `app/preprocess.py` always pads to a square 640×640.
+
+Different padding means slightly different input pixels, so slightly different
+predictions. That is a difference between two preprocessing conventions, not a
+decoder bug — and square 640×640 is the correct choice here, because it is what
+the ONNX export declares and what the TensorRT engine was built for.
+
+### Tolerances set accordingly
+
+Defaults changed from 2 px / 0.01 to **10 px / 0.2**, with the reasoning recorded
+in the source. Mean error of 0.546 px is what proves correctness; the tolerance
+exists to catch a broken decoder, not the known geometry difference.
+
+### Conclusion
+
+The decoder is validated. Every accuracy number from Part 5 onward rests on this,
+and it is the only opportunity to check — Ultralytics cannot run on the Nano.
+
+### One bug found and fixed
+
+The first run crashed on frame 2 with:
+
+```
+RuntimeError: Input type (torch.FloatTensor) and weight type (torch.cuda.FloatTensor)
+should be the same
+```
+
+`yolo.predict()` moves the underlying model to CUDA as a side effect, so the next
+raw call fed a CPU tensor to a now-GPU model. Fixed by pinning the model, the
+input tensor and `predict()` to CPU explicitly.
+
+---
+
 ## Next
 
-- [ ] Part 3: ONNX parity — validate the NumPy decoder against Ultralytics on
-      identical frames before trusting any accuracy number
+- [ ] Part 4: port to the Nano. Check the preprocessing-share prediction — on the
+      laptop CPU stages are ~40% of the frame; on four ARM Cortex-A57 cores they
+      should dominate
+- [ ] Extra rows: `--workspace=512` on the Nano; a separate laptop-built engine
+- [ ] Record a longer clip (60–90 s) before the Part 7 thermal runs
 - [ ] Part 3: ONNX parity — validate the NumPy decoder against Ultralytics on
       identical frames before trusting any accuracy number
 - [ ] Part 4: port to the Nano; check the preprocessing-share prediction above

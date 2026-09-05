@@ -5,6 +5,7 @@ model:
   input_res: 640
   opset: 13
   engine: models/yolov5nu_fp16.engine
+  torchscript: models/yolov5nu.torchscript
 
 engine:
   precision: fp16          # fp32 | fp16

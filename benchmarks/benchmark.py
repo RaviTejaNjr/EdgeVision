@@ -342,7 +342,7 @@ def main():
     p = argparse.ArgumentParser(description="EdgeVision benchmark harness")
     p.add_argument("--config", default="configs/params.yaml")
     p.add_argument("--runtime", required=True,
-                   choices=["pytorch", "onnxruntime", "tensorrt"])
+                   choices=["pytorch", "torchscript", "onnxruntime", "tensorrt"])
     p.add_argument("--precision", default="fp32", choices=["fp32", "fp16"])
     p.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     p.add_argument("--source", default=None)

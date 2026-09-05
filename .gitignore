@@ -9,6 +9,7 @@ __pycache__/
 *.pt
 *.onnx
 *.engine
+*.torchscript
 
 # Test data
 data/*.mp4

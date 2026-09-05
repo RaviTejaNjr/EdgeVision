@@ -72,6 +72,49 @@ class TorchBackend(Backend):
 
         return out.float().cpu().numpy()
 
+class TorchScriptBackend(Backend):
+    """
+    Frozen TorchScript graph. Needs only torch -- no Ultralytics -- which is why
+    this is the PyTorch path on the Jetson, where Ultralytics cannot run.
+    """
+
+    name = "torchscript"
+
+    def __init__(self, path, device="cuda", precision="fp32"):
+        self.path = path
+        self.device = device
+        self.precision = precision
+        self.model = None
+        self.torch = None
+
+    def load(self):
+        import torch
+
+        self.torch = torch
+
+        if self.device == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA requested but torch.cuda.is_available() is False")
+
+        self.model = torch.jit.load(self.path, map_location=self.device).eval()
+
+        if self.precision == "fp16":
+            self.model = self.model.half()
+
+    def infer(self, tensor):
+        t = self.torch.from_numpy(tensor).to(self.device)
+        if self.precision == "fp16":
+            t = t.half()
+
+        with self.torch.no_grad():
+            out = self.model(t)
+
+        if isinstance(out, (list, tuple)):
+            out = out[0]
+
+        if self.device == "cuda":
+            self.torch.cuda.synchronize()
+
+        return out.float().cpu().numpy()
 
 class OnnxBackend(Backend):
 
@@ -194,6 +237,9 @@ def build_backend(runtime, cfg, device, precision):
         return TorchBackend(cfg["model"]["weights"], device=device, precision=precision)
     if runtime == "onnxruntime":
         return OnnxBackend(cfg["model"]["onnx"], device=device)
+    if runtime == "torchscript":
+        return TorchScriptBackend(cfg["model"]["torchscript"], device=device,
+                                  precision=precision)
     if runtime == "tensorrt":
         return TensorRTBackend(cfg["model"]["engine"])
     raise ValueError("unknown runtime: %s" % runtime)

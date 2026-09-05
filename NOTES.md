@@ -916,6 +916,179 @@ it properly from `build_trt_engine.py`, which should clear it.
 
 ---
 
+## 2026-09-05 — TorchScript: the PyTorch path for the Nano
+
+### Why TorchScript rather than YOLOv5-on-device
+
+The plan's Part 4 called for a PyTorch baseline on the Nano. But `backends.py`
+loads models through Ultralytics, which **cannot run on Python 3.6**. Two options:
+
+- Clone YOLOv5 at a v6.x tag on the Nano and load through its own code — which
+  means pinning pandas, matplotlib, scipy and seaborn to versions that still
+  support 3.6
+- **Export TorchScript** — a self-contained file holding architecture and weights,
+  loadable with `torch.jit.load()` and nothing else
+
+Chose TorchScript, for three reasons:
+
+**It removes the dependency problem entirely.** No YOLOv5 repo, no version
+pinning exercise.
+
+**It is what you would actually do in production.** Nobody deploys a training
+repo to an edge device; freezing the graph is the standard way to ship a model
+without shipping the framework around it.
+
+**It isolates the runtime honestly.** YOLOv5's Python path would add its own
+pre- and postprocessing into a measurement meant to compare inference engines.
+
+### The manual trace failed — twice, for different reasons
+
+**First attempt:**
+
+```
+RuntimeError: Tracer cannot infer type of (tensor(...), {'boxes': ..., 'scores': ...,
+'feats': [...]})
+Dictionary inputs to traced functions must have consistent type.
+Found Tensor and List[Tensor]
+```
+
+The model returns `(predictions, extras)` where `extras` is a dict of mixed
+tensors and lists. The tracer cannot infer a consistent type for that.
+
+**Second attempt**, after wrapping the model to return only the prediction tensor:
+
+```
+ERROR: Tensor-valued Constant nodes differed in value across invocations.
+This often indicates that the tracer has encountered untraceable code.
+```
+
+The graph diff showed `make_anchors` present in the first invocation and absent
+in the second. **Ultralytics caches anchor points after the first forward pass**,
+so the two trace runs produce different graphs and the checker rejects it.
+
+**The answer was to stop hand-rolling it.** Ultralytics has a built-in TorchScript
+export, same as the ONNX one already in use:
+
+```python
+model = YOLO(cfg["model"]["weights"])
+model.export(format="torchscript", imgsz=cfg["model"]["input_res"])
+```
+
+It warms the model before tracing, so the anchor cache is populated and both
+invocations match. **Lesson: when a library's own exporter exists, use it — it
+knows about the library's internal state.**
+
+**Verified it loads standalone**, importing only torch:
+
+```
+returns a tensor: (1, 84, 8400) torch.float32
+```
+
+A bare tensor, no unwrapping needed, straight into the NumPy decoder.
+
+---
+
+## PROBLEM 6 — the vendor fan profile governs GPU clocks
+
+**Three TorchScript runs gave 67.85, 24.78 and 66.30 ms.** Wildly inconsistent —
+itself the signature of an unstable clock rather than a real difference.
+
+### The sequence of wrong conclusions
+
+1. **"TorchScript is 78% slower than PyTorch."** Wrong — measured under a capped
+   clock.
+2. **"The GPU won't boost because the fan is detached."** Wrong — but only
+   discovered later, because the test that seemed to disprove it was itself
+   contaminated by Whisper mode being active simultaneously.
+3. `powercfg /getactivescheme` returned **Balanced**, having silently reverted
+   from Best performance at some point. Setting it back helped, but not enough.
+
+### The actual cause
+
+The **vendor utility's fan profile was set to Whisper**, and on this laptop that
+profile caps GPU power and clocks regardless of what Windows' power mode says.
+
+`nvidia-smi` during a run: **210 MHz for the entire duration** — 10% of the
+2100 MHz ceiling, at 85% utilisation.
+
+### The fix, and the confirmation
+
+Setting the **CPU fan profile to Performance** released the GPU as well:
+
+| Reading | Whisper | Performance |
+|---|---|---|
+| Power cap | 30 W | **56 W** |
+| Perf state | P8 (idle) | **P0 (max)** |
+| Clock under load | 210 MHz | **1057–1567 MHz** |
+
+**The GPU fan being detached was never the cause.** It may cap the ceiling
+somewhat — clocks top out at 1567 of 2100 — but Whisper mode was the 10× factor.
+
+### Protocol change
+
+**`powercfg` is not sufficient.** Windows can report "Best performance" while a
+vendor profile silently overrides it. The only reliable check is the hardware's
+own telemetry during an actual run:
+
+```
+nvidia-smi --query-gpu=clocks.sm,power.limit,pstate --format=csv
+```
+
+`P0` and a 56 W cap means the machine is in the right state. Anything else and
+the measurement is invalid.
+
+**This is the third occasion laptop measurements were silently invalidated by
+power state.** Worth stating as a limitation of the laptop as a measurement
+platform — and a sharp contrast with the Jetson, where `nvpmodel -q` and
+`jetson_clocks` are explicit and honoured.
+
+---
+
+## TorchScript vs PyTorch — six clean runs
+
+Alternated between runtimes so any drift would affect both equally. All at
+Best performance, mains, CPU fan Performance, clocks verified above 900 MHz.
+
+| Runtime | Inference | CV | Engine FPS | E2E FPS |
+|---|---|---|---|---|
+| PyTorch | 13.63 ± 0.45 ms | 3.3% | 73.45 | 41.73 |
+| **TorchScript** | **8.33 ± 0.81 ms** | 9.7% | **120.79** | **57.47** |
+
+**TorchScript is 38.9% faster on inference, 37.7% faster end-to-end.**
+
+**Why:** TorchScript freezes the graph and executes it in C++, removing Python
+interpreter dispatch from the forward pass. For a small model with many cheap
+layers, that dispatch cost is a large share of the total.
+
+**Detections identical at 8.27** across all six runs — the frozen graph produces
+the same output as eager mode.
+
+### The clock log explains the variance
+
+Peak `clocks.sm` per run:
+
+| Run | Peak |
+|---|---|
+| PyTorch 1 / 2 / 3 | 1057 / 1057 / 1080 MHz |
+| TorchScript 1 / 2 / 3 | 1305 / **1567** / **1567** MHz |
+
+**TorchScript drove the GPU to higher clocks than PyTorch ever reached.** Likely
+because the workload is denser and sustained — the boost algorithm responds to
+continuous demand rather than the stop-start pattern of Python dispatch.
+
+So part of the 38.9% is the runtime itself, and part is the GPU being permitted
+to work harder *because* of the runtime. Both are real consequences of the same
+cause, and the honest framing is that they are not separable from these
+measurements alone.
+
+It also explains TorchScript's higher CV (9.7% vs 3.3%): its clocks ranged
+1305–1567 across runs while PyTorch sat consistently near 1057.
+
+**Utilisation still peaks around 43%**, so the pipeline remains partly CPU-bound
+even at these clocks.
+
+---
+
 ## Next
 - [ ] Extra rows: `--workspace=512` on the Nano; a separate laptop-built engine
 - [ ] Record a longer clip (60–90 s) before the Part 7 thermal runs

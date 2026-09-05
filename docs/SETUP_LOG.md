@@ -1314,9 +1314,176 @@ the model, input tensor and `predict()` to CPU explicitly.
 
 ---
 
+## Part 4 — Nano: running the pipeline on target
+
+### 31. Recovering an unresponsive board
+
+First power-on after several days: no SSH, `ping` returned 100% loss.
+
+```
+arp -a | findstr 192.168.137
+→ Interface: 192.168.137.1 --- 0x10
+  192.168.137.244  48-b0-2d-2f-64-83  static
+```
+
+Laptop had `.1` so ICS was running; the Nano's MAC was cached. `static` rather
+than `dynamic` is the hint — a cached record, not proof the board is alive.
+
+**Resolution: attach a monitor, restart.** Second time it booted normally. This
+has now happened twice; a third occurrence would warrant investigating SD card
+seating or power delivery at boot.
+
+### 32. Making the CUDA paths permanent
+
+```bash
+echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+tail -2 ~/.bashrc                                   # verify
+```
+
+⚠️ **`>>` appends; a single `>` truncates the file first.** One character between
+adding a line and destroying a shell configuration.
+
+### 33. Back to headless
+
+Attaching the monitor had started the desktop.
+
+```bash
+sudo systemctl set-default multi-user.target
+sudo reboot
+```
+
+| State | Used | Available |
+|---|---|---|
+| Desktop | 592 MB | 1.2 GB |
+| **Text mode** | **271 MB** | **1.6 GB** |
+
+**321 MB recovered** — 16% of the board's total.
+
+```bash
+systemctl get-default                       # which is active
+sudo systemctl set-default graphical.target # to reverse
+sudo systemctl start graphical.target       # desktop now, boot unchanged
+```
+
+HDMI is hot-pluggable; the monitor can be pulled while running.
+
+### 34. Cloning the repo with a personal access token
+
+**GitHub → Settings → Developer settings → Personal access tokens →
+Fine-grained tokens.**
+
+| Field | Value |
+|---|---|
+| Name | `edgevision-nano` |
+| Repository access | Only select repositories → EdgeVision |
+| Permissions → Contents | **Read and write** |
+
+Write access matters: results are generated on the Nano and pushed from there.
+
+```bash
+mv ~/edgevision ~/spike_artifacts     # avoid ~/edgevision vs ~/EdgeVision
+cd ~
+git clone https://github.com/RaviTejaNjr/EdgeVision.git
+```
+
+Username `RaviTejaNjr`, token as the password. Nothing displays while pasting.
+
+**Why clone rather than `scp`:** without a repo on the Nano, the `git_commit`
+column in `speed.csv` reads `unknown`, breaking the provenance chain. Code also
+iterates between machines through Parts 5–6.
+
+### 35. Placing the artifacts
+
+```bash
+ls -R ~/spike_artifacts                              # -R recurses
+mv ~/spike_artifacts/models/yolov5nu.onnx models/
+mv ~/spike_artifacts/models/yolov5nu_fp16.engine models/
+```
+
+Both are gitignored, so the clone could not bring them, but
+`configs/params.yaml` expects them in `models/`.
+
+**From the laptop**, the one file that must be copied manually:
+
+```
+scp data\test_video.mp4 raviteja@192.168.137.244:~/EdgeVision/data/
+```
+
+### 36. Dependency check before installing anything
+
+```bash
+python3 -c "import numpy, cv2; print(numpy.__version__, cv2.__version__)"
+→ 1.13.3 4.1.1
+python3 -c "import yaml; print('ok')"      → ok
+python3 -c "import psutil"                 → ModuleNotFoundError
+```
+
+**Check before installing.** numpy and OpenCV are JetPack builds with CUDA and
+GStreamer support; pip versions would shadow them with inferior ones.
+
+```bash
+pip3 install --user psutil
+```
+
+Arrived as a **prebuilt aarch64 wheel for cp36** — no compilation. Version 7.2.2,
+matching the laptop, so memory figures are comparable.
+
+### 37. Locking the board state before measuring
+
+```bash
+sudo nvpmodel -m 0          # MAXN / 10W
+sudo jetson_clocks          # lock clocks against DVFS
+sudo nvpmodel -q            # verify
+cat /sys/devices/pwm-fan/target_pwm    # 0 = off, 255 = full
+```
+
+`jetson_clocks` does **not** start the fan. To control it:
+
+```bash
+sudo sh -c 'echo 255 > /sys/devices/pwm-fan/target_pwm'
+```
+
+Fan deliberately left **off** for the baseline — the fan-on comparison is a Part 7
+experiment, and changing conditions midway would invalidate it.
+
+### 38. The benchmark run
+
+```bash
+cd ~/EdgeVision
+python3 benchmarks/benchmark.py --runtime tensorrt --precision fp16 \
+    --frames 500 --host-profile jetson-10w-clocks-locked-fan-off \
+    --clocks-locked true --fan false --notes "nano tensorrt fp16 run 1"
+```
+
+**Worked first attempt, no code changes.** Three runs:
+
+| Metric | Mean | CV |
+|---|---|---|
+| Inference | **51.76 ms** | **0.25%** |
+| Engine FPS | 19.32 | 0.23% |
+| End-to-end FPS | 12.51 | 0.46% |
+| Mean detections | 8.32 | — |
+
+⚠️ **`--clocks-locked` is not auto-detected.** The first run recorded `false`
+despite `jetson_clocks` having been applied — the harness takes whatever the flag
+says. Pass it explicitly.
+
+⚠️ **TensorRT warning on every run:**
+
+```
+[TRT] [W] Using an engine plan file across different models of devices is not
+recommended and is likely to affect performance or even cause errors.
+```
+
+The engine was built during the day-zero spike, before several reboots. Numbers
+are stable and detections correct, so probably benign. Part 5 rebuilds it properly.
+
+---
+
 ## Still to do
 
-- [ ] **Part 4:** port to the Nano — NVIDIA torch wheel, torchvision from source,
+- [ ] **Part 4 remainder:** PyTorch baseline on the Nano — NVIDIA torch wheel, torchvision from source,
       YOLOv5 dependencies pinned for Python 3.6. **Timeboxed to 2 hours**; fall
       back to Option B if torchvision does not compile
 - [ ] Check the preprocessing-share prediction: CPU stages are ~40% of the frame

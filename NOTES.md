@@ -702,11 +702,221 @@ input tensor and `predict()` to CPU explicitly.
 
 ---
 
-## Next
+## 2026-09-05 — Part 4 begins: bringing the Nano back up
 
-- [ ] Part 4: port to the Nano. Check the preprocessing-share prediction — on the
-      laptop CPU stages are ~40% of the frame; on four ARM Cortex-A57 cores they
-      should dominate
+### The board needed two attempts to boot
+
+First power-on: no SSH, and `ping 192.168.137.244` returned 100% packet loss.
+
+Diagnosis was quick because the two-machine split makes it easy to isolate:
+
+```
+arp -a | findstr 192.168.137
+→ Interface: 192.168.137.1 --- 0x10
+  192.168.137.244  48-b0-2d-2f-64-83  static
+```
+
+Windows ICS was running (laptop had .1) and the Nano's MAC was in the ARP table,
+so the network configuration was intact. The `static` rather than `dynamic` entry
+was the hint — a cached record, not a live one.
+
+**Resolution:** attached a monitor and keyboard. Initially nothing on screen, then
+a restart brought it up normally to the login prompt.
+
+**This is the second time the board has needed a restart to come up cleanly.**
+Twice could be coincidence; a third time would be worth investigating. Noted in
+case it recurs. Possible causes to check if it does: SD card seating, power supply
+under-delivery at boot, or a filesystem check stalling.
+
+### Housekeeping done while it was up
+
+**CUDA paths made permanent.** They had been re-typed in three separate sessions:
+
+```bash
+echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+```
+
+`>>` appends; a single `>` would overwrite the whole file.
+
+**Back to headless.** Attaching the monitor had started the desktop, which showed
+up immediately in the memory figures:
+
+| State | Used | Available |
+|---|---|---|
+| Desktop running | 592 MB | 1.2 GB |
+| **Text mode (`multi-user.target`)** | **271 MB** | **1.6 GB** |
+
+**321 MB recovered**, and 1.6 GB available is better than the ~350 MB baseline
+recorded earlier. That headroom matters: the torchvision compile ahead is the most
+memory-hungry step in the project.
+
+```bash
+sudo systemctl set-default multi-user.target   # graphical.target to reverse
+systemctl get-default                          # check which is active
+sudo systemctl start graphical.target          # start desktop now, without changing boot
+```
+
+**Disk:** 96 GB free of 118 GB. No concern.
+
+**IPv6 gone.** `hostname -I` now returns only `192.168.137.244` and Docker's
+`172.17.0.1` — no `2003:d1:...` address this time. The `gai.conf` fix plus a clean
+boot left it IPv4-only.
+
+**HDMI is hot-pluggable** — the monitor can be pulled while the board runs, with
+no desktop session to disturb in text mode.
+
+### Ignoring the update notice
+
+Login banner reports 329 available updates, 275 of them security. **Deliberately
+not applied.** `nvidia-l4t-bootloader` and `nvidia-l4t-init` are held, and a broad
+`apt upgrade` on JetPack 4.6 risks pulling package versions that conflict with the
+pinned L4T stack. This is a development board on an isolated link, not a
+production system.
+
+---
+
+## 2026-09-05 — Part 4: TensorRT running on the Nano
+
+### Setup
+
+Cloned the repo onto the board with a fine-grained GitHub personal access token
+(Contents: read **and** write, so results can be pushed back from the Nano). The
+alternative — `scp`ing files across — was rejected because the `git_commit` column
+in `speed.csv` would read `unknown` on a machine with no repo, breaking the
+provenance chain that makes the results table defensible.
+
+The spike folder was renamed `~/spike_artifacts` before cloning, to avoid
+`~/edgevision` and `~/EdgeVision` coexisting as separate directories.
+
+The ONNX and engine files were moved into `models/` — gitignored, so the clone
+could not bring them, but `configs/params.yaml` expects them there. The test video
+went across by `scp`, being the one file that must.
+
+**Dependencies:** `numpy 1.13.3` and `cv2 4.1.1` already present (JetPack builds,
+CUDA and GStreamer enabled — do not replace). `yaml` already present. Only
+`psutil` needed installing, and it arrived as a **prebuilt aarch64 wheel** for
+cp36 — no compilation. Version 7.2.2, matching the laptop, so memory figures are
+directly comparable.
+
+### It worked first try
+
+```bash
+sudo nvpmodel -m 0        # MAXN / 10W
+sudo jetson_clocks        # lock clocks
+python3 benchmarks/benchmark.py --runtime tensorrt --precision fp16 \
+    --frames 500 --host-profile jetson-10w-clocks-locked-fan-off \
+    --clocks-locked true --fan false --notes "nano tensorrt fp16 run 1"
+```
+
+TensorRT inference on the Jetson, through the same harness written on the laptop,
+with no code changes. The pluggable-backend design paid off exactly as intended.
+
+### Results — three runs
+
+| Metric | Mean | SD | CV |
+|---|---|---|---|
+| Inference | **51.76 ms** | 0.13 | **0.25%** |
+| Engine FPS | **19.32** | 0.04 | 0.23% |
+| End-to-end FPS | **12.51** | 0.06 | 0.46% |
+
+**The Nano is roughly 30× more reproducible than the laptop.** Laptop CVs ranged
+2.8–7.7%; this is 0.25%. Locked clocks, no competing desktop workload, no thermal
+governor intervening. Engine p50/p95 within a single run: 51.65 / 51.92 ms — a
+0.27 ms spread over 500 frames.
+
+**Worth stating explicitly in the README:** a constrained embedded board is a
+*better* measurement instrument than a general-purpose laptop, because there is
+almost nothing else happening on it.
+
+**8.32 mean detections**, against the laptop's 8.27 on the same 500 frames. The
+decoder produces the same output on both machines — the hand-written NumPy
+postprocessing validated on target hardware.
+
+### The prediction was wrong, and that is the interesting part
+
+**Predicted at Part 2:** CPU stages are ~40% of the frame on an i9; on four ARM
+Cortex-A57 cores they should *dominate*.
+
+**Measured:**
+
+| Stage | Laptop | Nano | Ratio |
+|---|---|---|---|
+| capture | 2.32 ms | 5.70 ms | 2.5× |
+| preprocess | 6.43 ms | 13.67 ms | 2.1× |
+| inference | 16.17 ms | 51.76 ms | **3.2×** |
+| postprocess + NMS | 2.16 ms | 8.77 ms | 4.1× |
+
+| | Laptop | Nano |
+|---|---|---|
+| CPU stages | 10.91 ms (**40%**) | 28.14 ms (**35%**) |
+| Inference | 16.17 ms (60%) | 51.76 ms (65%) |
+
+**CPU stages became a *smaller* share, not a larger one.**
+
+The reason: inference scaled by 3.2× while the CPU stages scaled by 2.1–2.5×.
+Going from an RTX 3050 to a 128-core Maxwell GPU is a bigger step down than going
+from an i9-11900H to four Cortex-A57 cores — at least for this workload, and
+noting that the laptop GPU was itself capped near 1057 MHz of 2100.
+
+Postprocess is the exception at 4.1×, the worst-scaling stage. NMS is
+sort-and-compare on a single core with no vectorisation benefit, which is exactly
+what ARM does worst.
+
+**Recording this as a failed prediction is more valuable than being right.** It
+shows the measurement was made to test something rather than to confirm it.
+
+### A thermal signal, too small to matter but real
+
+Across the three consecutive runs:
+
+| Run | Inference | Max temp |
+|---|---|---|
+| 1 | 51.68 ms | 37.5 °C |
+| 2 | 51.70 ms | 40.0 °C |
+| 3 | 51.91 ms | 42.5 °C |
+
+**A 0.4% slowdown over 5 °C.** Far too small to affect anything here, but it is
+the same mechanism Part 7 will measure over ten-minute runs. Good to have caught
+its beginning.
+
+### Fan state
+
+`cat /sys/devices/pwm-fan/target_pwm` → `0`. The fan is fitted and detected but
+off. `jetson_clocks` did not start it.
+
+**Deliberately left off** for the baseline. The fan-on/fan-off comparison is a
+Part 7 experiment; changing conditions midway through baselining would invalidate
+the comparison.
+
+To control it manually:
+
+```bash
+sudo sh -c 'echo 255 > /sys/devices/pwm-fan/target_pwm'    # 0-255
+```
+
+### Two things to carry forward
+
+**The `clocks_locked` field is not auto-detected.** The first run recorded `false`
+despite `jetson_clocks` having been applied, because the harness takes whatever
+the flag says. Passed explicitly from run 2 onward. **A field that can silently
+disagree with reality is worse than no field** — worth revisiting whether it can
+be read from the system.
+
+**TensorRT warning on every run:**
+
+```
+[TRT] [W] Using an engine plan file across different models of devices is not
+recommended and is likely to affect performance or even cause errors.
+```
+
+The engine was built during the day-zero spike, before several reboots. Probably
+benign — the numbers are stable and the detections correct — but Part 5 rebuilds
+it properly from `build_trt_engine.py`, which should clear it.
+
+---
+
+## Next
 - [ ] Extra rows: `--workspace=512` on the Nano; a separate laptop-built engine
 - [ ] Record a longer clip (60–90 s) before the Part 7 thermal runs
 - [ ] Part 3: ONNX parity — validate the NumPy decoder against Ultralytics on

@@ -1089,6 +1089,113 @@ even at these clocks.
 
 ---
 
+## 2026-09-05 — Part 4 complete: the headline result
+
+### The torchvision build was never needed
+
+The plan timeboxed the torch install at two hours, with Option B written in as a
+fallback if torchvision would not compile. **It took about ten minutes**, and
+torchvision turned out to be unnecessary.
+
+```bash
+sudo apt-get install -y libopenblas-base libopenmpi-dev libomp-dev
+wget <nvidia box url> -O torch-1.10.0-cp36-cp36m-linux_aarch64.whl   # 308 MB, 33 s
+pip3 install --user --no-deps torch-1.10.0-cp36-cp36m-linux_aarch64.whl
+```
+
+```
+torch 1.10.0
+cuda available: True
+device: NVIDIA Tegra X1
+```
+
+Then the question the whole TorchScript detour was for:
+
+```
+python3 models/check_torchscript.py
+→ returns a tensor: (1, 84, 8400) torch.float32
+```
+
+**`torch.jit.load` works with torch alone.** YOLOv5n is pure convolutions, so the
+traced graph has no torchvision operators — no `nms`, no `roi_align`. The riskiest
+step in the plan, a 1–2 hour source compile on a 2 GB board with real OOM risk,
+simply evaporated.
+
+**Why `--no-deps`:** the wheel declares `typing-extensions` and `dataclasses`,
+which pip would resolve from PyPI and potentially pull versions that fail to build
+on Python 3.6. Nothing was missing, so nothing needed adding.
+
+**The apt packages matter.** The wheel is dynamically linked against OpenBLAS,
+OpenMPI and OpenMP. Without them the install succeeds and `import torch` then
+fails on a missing shared library — a confusing failure one step removed from its
+cause.
+
+---
+
+## THE HEADLINE RESULT
+
+Three runs each, same board, same model, same harness, same video, same 500
+frames. 10 W, clocks locked, fan off.
+
+| | TorchScript FP32 | TensorRT FP16 | Improvement |
+|---|---|---|---|
+| **Inference** | 93.15 ± 0.47 ms | **51.76 ± 0.13 ms** | **1.80×** |
+| Engine FPS | 10.74 ± 0.06 | **19.32 ± 0.04** | 1.80× |
+| End-to-end FPS | 8.21 ± 0.06 | **12.51 ± 0.06** | 1.52× |
+| Cold start | 24.3 s | **4.1 s** | **5.9×** |
+| Mean detections | 8.33 | 8.32 | **−0.1%** |
+| CV | 0.50% | 0.25% | — |
+
+### Four things make this defensible rather than merely impressive
+
+**Detections agree to 0.1%.** 8.33 versus 8.32 on identical frames. The speedup
+did not cost correctness — the FP32/FP16 numerical difference is barely
+measurable. (Proper mAP comes at Part 5.)
+
+**End-to-end is 1.52× while inference is 1.80×.** The ~28 ms of CPU work is
+unchanged, so it dilutes the gain. Reporting both stops the claim being
+overstated — and most published edge benchmarks report only the first.
+
+**CVs of 0.25–0.50%.** Three runs each. Tighter than anything the laptop produced.
+
+**Cold start improved 5.9×** — 24.3 s to 4.1 s. TorchScript deserialises and sets
+up a graph; TensorRT loads a pre-compiled engine. A real operational difference
+for a service that must come up quickly, and one nobody usually measures.
+
+### The contrast the plan predicted
+
+**PyTorch FP16 on the RTX 3050 gave no speedup over FP32** (8.4% *slower* on
+inference, equivalent end-to-end).
+
+**TensorRT FP16 on the Nano gave 1.80×.**
+
+Same precision change, opposite outcomes. The reason: `.half()` converts dtypes
+while keeping the same layer-by-layer execution; **TensorRT selects different
+fused kernels and halves actual memory traffic.** On a bandwidth-bound board that
+is the whole game.
+
+This was written into the plan as the expected contrast, and it held.
+
+### Thermal trend, now clearer
+
+| Run | Inference | Max temp |
+|---|---|---|
+| smoke (200 frames) | 92.54 ms | 36.0 °C |
+| run 1 | 92.61 ms | 42.5 °C |
+| run 2 | 93.43 ms | 46.5 °C |
+| run 3 | 93.41 ms | 49.5 °C |
+
+**1% slowdown over 13.5 °C.** More pronounced than the TensorRT runs showed,
+because TorchScript works the GPU harder for longer. Still negligible at this
+scale, but the trend is now visible enough to predict what Part 7's ten-minute
+runs will show.
+
+`fps_sustained_last_60s` read 8.30, 8.19, 8.25 against means of 8.26, 8.15, 8.21
+— slightly *higher* at the end of each run. No degradation within a single run at
+this length.
+
+---
+
 ## Next
 - [ ] Extra rows: `--workspace=512` on the Nano; a separate laptop-built engine
 - [ ] Record a longer clip (60–90 s) before the Part 7 thermal runs

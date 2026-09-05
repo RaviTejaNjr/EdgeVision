@@ -1481,9 +1481,132 @@ are stable and detections correct, so probably benign. Part 5 rebuilds it proper
 
 ---
 
+### 39. TorchScript export — the PyTorch path for the Nano
+
+Ultralytics cannot run on Python 3.6, so `backends.py`'s PyTorch path is
+unavailable on the Jetson. TorchScript solves it: a self-contained file holding
+architecture and weights, loadable with `torch.jit.load()` and nothing else.
+
+**Two manual trace attempts failed:**
+
+```
+RuntimeError: Tracer cannot infer type of (tensor(...), {'boxes':..., 'feats':[...]})
+Dictionary inputs to traced functions must have consistent type.
+```
+
+The model returns `(predictions, extras)` with `extras` a dict of mixed tensors
+and lists. After wrapping to return only the prediction tensor:
+
+```
+ERROR: Tensor-valued Constant nodes differed in value across invocations.
+```
+
+**Ultralytics caches anchor points after the first forward pass**, so the two
+trace runs produce different graphs.
+
+**Use the library's own exporter instead:**
+
+```python
+model = YOLO(cfg["model"]["weights"])
+model.export(format="torchscript", imgsz=cfg["model"]["input_res"])
+```
+
+It warms the model before tracing, so the anchor cache is populated and both
+invocations match. **Lesson: when a library ships its own exporter, use it — it
+knows about internal state you do not.**
+
+Add to `.gitignore`:
+
+```
+*.torchscript
+```
+
+---
+
+### 40. Installing NVIDIA's PyTorch wheel on the Nano
+
+**System libraries first** — the wheel is dynamically linked against these, and
+without them the install succeeds and `import torch` then fails on a missing
+shared library:
+
+```bash
+sudo apt-get install -y libopenblas-base libopenmpi-dev libomp-dev
+```
+
+**Download the wheel.** PyPI has no Jetson build; NVIDIA hosts these separately,
+and each wheel matches one JetPack/Python/CUDA combination. JetPack 4.6 needs
+**torch 1.10.0, cp36, aarch64**:
+
+```bash
+wget https://nvidia.box.com/shared/static/fjtbno0vpo676a25cgvuqc1wty0fkkg6.whl \
+     -O torch-1.10.0-cp36-cp36m-linux_aarch64.whl
+```
+
+308 MB, 33 s over the ICS link.
+
+**Install:**
+
+```bash
+pip3 install --user --no-deps torch-1.10.0-cp36-cp36m-linux_aarch64.whl
+```
+
+`--no-deps` because the wheel declares `typing-extensions` and `dataclasses`,
+which pip would resolve from PyPI and may pull versions that fail to build on 3.6.
+Nothing turned out to be missing.
+
+**Verify:**
+
+```bash
+python3 -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+→ 1.10.0 True NVIDIA Tegra X1
+```
+
+**Total time: about ten minutes**, against a two-hour timebox.
+
+---
+
+### 41. torchvision was not needed
+
+```bash
+python3 models/check_torchscript.py
+→ returns a tensor: (1, 84, 8400) torch.float32
+```
+
+**`torch.jit.load` works with torch alone.** YOLOv5n is pure convolutions, so the
+traced graph contains no torchvision operators — no `nms`, no `roi_align`.
+
+The riskiest step in the plan — a 1–2 hour source compile on a 2 GB board with
+real OOM risk — was avoided entirely by choosing TorchScript over cloning YOLOv5.
+
+---
+
+### 42. The comparison run
+
+```bash
+sudo nvpmodel -m 0
+sudo jetson_clocks
+python3 benchmarks/benchmark.py --runtime torchscript --device cuda \
+    --precision fp32 --frames 500 \
+    --host-profile jetson-10w-clocks-locked-fan-off \
+    --clocks-locked true --fan false --notes "nano torchscript fp32 run 1"
+```
+
+Three runs each of TorchScript FP32 and TensorRT FP16:
+
+| | TorchScript FP32 | TensorRT FP16 | Improvement |
+|---|---|---|---|
+| Inference | 93.15 ± 0.47 ms | **51.76 ± 0.13 ms** | **1.80×** |
+| Engine FPS | 10.74 | **19.32** | 1.80× |
+| End-to-end FPS | 8.21 | **12.51** | 1.52× |
+| Cold start | 24.3 s | **4.1 s** | 5.9× |
+| Mean detections | 8.33 | 8.32 | −0.1% |
+
+---
+
 ## Still to do
 
-- [ ] **Part 4 remainder:** PyTorch baseline on the Nano — NVIDIA torch wheel, torchvision from source,
+- [ ] **Part 5:** rebuild the engine properly with `build_trt_engine.py`; add
+      TensorRT FP32 for a same-precision comparison; measure mAP — NVIDIA torch wheel, torchvision from source,
       YOLOv5 dependencies pinned for Python 3.6. **Timeboxed to 2 hours**; fall
       back to Option B if torchvision does not compile
 - [ ] Check the preprocessing-share prediction: CPU stages are ~40% of the frame

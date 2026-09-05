@@ -33,7 +33,7 @@ def class_colour(class_id):
     return tuple(int(c) for c in rng.randint(60, 255, size=3))
 
 
-def draw(frame, boxes, scores, class_ids, label, fps, frame_ms):
+def draw(frame, boxes, scores, class_ids, label, fps, frame_ms, accent):
     out = frame.copy()
 
     for box, score, cls in zip(boxes, scores, class_ids):
@@ -48,16 +48,25 @@ def draw(frame, boxes, scores, class_ids, label, fps, frame_ms):
         cv2.putText(out, text, (x1 + 2, max(y1 - 4, th)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
 
-    # Header band with the runtime and live timing.
+    # Header band. Deliberately oversized: the composed video is downscaled for
+    # the README GIF, and text rendered at normal size does not survive that.
     h, w = out.shape[:2]
-    cv2.rectangle(out, (0, 0), (w, 52), (24, 24, 24), -1)
-    cv2.putText(out, label, (14, 34), cv2.FONT_HERSHEY_SIMPLEX,
-                0.8, (255, 255, 255), 2, cv2.LINE_AA)
+    band = 96
+    cv2.rectangle(out, (0, 0), (w, band), (18, 18, 18), -1)
+    cv2.line(out, (0, band), (w, band), accent, 4)
 
-    stat = "%.1f FPS   %.0f ms/frame   %d objects" % (fps, frame_ms, len(boxes))
-    (sw, _), _ = cv2.getTextSize(stat, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-    cv2.putText(out, stat, (w - sw - 14, 34), cv2.FONT_HERSHEY_SIMPLEX,
-                0.7, (120, 255, 120), 2, cv2.LINE_AA)
+    cv2.putText(out, label, (24, 64), cv2.FONT_HERSHEY_SIMPLEX,
+                1.6, accent, 3, cv2.LINE_AA)
+
+    stat = "%.1f FPS" % fps
+    (sw, _), _ = cv2.getTextSize(stat, cv2.FONT_HERSHEY_SIMPLEX, 1.8, 4)
+    cv2.putText(out, stat, (w - sw - 24, 66), cv2.FONT_HERSHEY_SIMPLEX,
+                1.8, (255, 255, 255), 4, cv2.LINE_AA)
+
+    detail = "%.0f ms/frame   %d objects" % (frame_ms, len(boxes))
+    (dw, _), _ = cv2.getTextSize(detail, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+    cv2.putText(out, detail, (w - dw - 24, 88), cv2.FONT_HERSHEY_SIMPLEX,
+                0.8, (170, 170, 170), 2, cv2.LINE_AA)
 
     return out
 
@@ -84,6 +93,10 @@ def main():
     iou_th = cfg["runtime"]["nms_iou"]
 
     label = args.label or "%s %s" % (args.runtime.upper(), args.precision.upper())
+
+    # BGR. Green marks the optimised runtime, amber the baseline, so the two
+    # panes are distinguishable at a glance even in a small GIF.
+    accent = (120, 255, 120) if args.runtime == "tensorrt" else (80, 180, 255)
     out_path = args.out or "assets/demo_%s_%s.mp4" % (args.runtime, args.precision)
     if not os.path.isdir("assets"):
         os.makedirs("assets")
@@ -146,7 +159,7 @@ def main():
         smoothed_fps = inst if smoothed_fps is None else 0.9 * smoothed_fps + 0.1 * inst
 
         writer.write(draw(frame, boxes, scores, class_ids,
-                          label, smoothed_fps, elapsed * 1000.0))
+                          label, smoothed_fps, elapsed * 1000.0, accent))
 
         n += 1
         if n % 50 == 0:

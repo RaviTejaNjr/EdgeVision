@@ -37,10 +37,16 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--left", required=True, help="slower runtime, shown on the left")
     p.add_argument("--right", required=True, help="faster runtime")
+    p.add_argument("--layout", default="vstack", choices=["vstack", "hstack"],
+                   help="vstack gives a 16:9-ish frame that survives downscaling "
+                        "to a README GIF; hstack is 32:9 and very wide")
+    p.add_argument("--divider", type=int, default=6,
+                   help="pixels of separator between the two panes")
     p.add_argument("--out", default="assets/demo_comparison.mp4")
     p.add_argument("--gif", default="assets/demo_comparison.gif")
-    p.add_argument("--gif-width", type=int, default=960,
-                   help="GIF width; 960 keeps it under a few MB for a README")
+    p.add_argument("--gif-width", type=int, default=640,
+                   help="GIF width. With vstack, 640 halves the source and keeps "
+                        "the overlay text legible; hstack needs more.")
     p.add_argument("--gif-fps", type=int, default=12)
     p.add_argument("--gif-seconds", type=float, default=12.0)
     p.add_argument("--no-retime", action="store_true",
@@ -55,19 +61,28 @@ def main():
     print("speedup: %.2fx" % (rm["mean_fps"] / lm["mean_fps"]))
     print("")
 
+    # A visible separator between the panes. Without it the two frames butt
+    # together and read as one confusing image.
+    if args.layout == "vstack":
+        pad = "pad=iw:ih+%d:0:0:color=0x202020" % args.divider
+        stack = "vstack=inputs=2"
+    else:
+        pad = "pad=iw+%d:ih:0:0:color=0x202020" % args.divider
+        stack = "hstack=inputs=2"
+
     if args.no_retime:
-        left_filter = "[0:v]scale=-2:720[l]"
-        right_filter = "[1:v]scale=-2:720[r]"
+        left_filter = "[0:v]%s[l]" % pad
+        right_filter = "[1:v]null[r]"
     else:
         # Videos were written at 30 fps. setpts rescales presentation timestamps
         # so each plays at the throughput actually measured.
         left_rate = lm["mean_fps"] / 30.0
         right_rate = rm["mean_fps"] / 30.0
-        left_filter = "[0:v]setpts=PTS/%.6f,scale=-2:720[l]" % left_rate
-        right_filter = "[1:v]setpts=PTS/%.6f,scale=-2:720[r]" % right_rate
+        left_filter = "[0:v]setpts=PTS/%.6f,%s[l]" % (left_rate, pad)
+        right_filter = "[1:v]setpts=PTS/%.6f[r]" % right_rate
         print("retiming: left x%.3f, right x%.3f" % (left_rate, right_rate))
 
-    filter_complex = "%s;%s;[l][r]hstack=inputs=2[v]" % (left_filter, right_filter)
+    filter_complex = "%s;%s;[l][r]%s[v]" % (left_filter, right_filter, stack)
 
     cmd = [
         "ffmpeg", "-y",

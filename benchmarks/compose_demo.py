@@ -49,6 +49,12 @@ def main():
                         "the overlay text legible; hstack needs more.")
     p.add_argument("--gif-fps", type=int, default=12)
     p.add_argument("--gif-seconds", type=float, default=12.0)
+    p.add_argument("--gif-speed", type=float, default=3.0,
+                   help="playback multiplier for the GIF. The composed MP4 is "
+                        "already retimed to real throughput, so a GIF sampled "
+                        "from it plays at a fraction of real speed. Speeding it "
+                        "up restores watchable motion; the ratio between the two "
+                        "panes is unaffected, so the comparison stays honest.")
     p.add_argument("--no-retime", action="store_true",
                    help="play both at 30 fps instead of real relative speed")
     args = p.parse_args()
@@ -98,33 +104,40 @@ def main():
     print("composing %s ..." % args.out)
     subprocess.run(cmd, check=True)
 
-    # A GIF is what actually renders inline in a GitHub README. Two-pass palette
-    # generation because the default 216-colour palette makes video look awful.
-    palette = "assets/_palette.png"
-    subprocess.run([
-        "ffmpeg", "-y", "-t", str(args.gif_seconds), "-i", args.out,
-        "-vf", "fps=%d,scale=%d:-1:flags=lanczos,palettegen"
-               % (args.gif_fps, args.gif_width),
-        palette,
-    ], check=True)
+    # A GIF is what renders inline in a GitHub README.
+    #
+    # setpts comes FIRST and is the important part. The composed MP4 is already
+    # retimed to real throughput, so sampling a GIF from it directly plays back
+    # at a fraction of real speed -- the two slowdowns compound. Speeding up here
+    # restores watchable motion. Both panes are scaled equally, so the ratio
+    # between them is unchanged and the FPS counters still read true.
+    #
+    # split/palettegen/paletteuse in a single pass: the default 216-colour GIF
+    # palette makes video look terrible, and a single filtergraph avoids the
+    # temporary palette file entirely.
+    vf = ("setpts=PTS/%.4f,fps=%d,scale=%d:-1:flags=lanczos,"
+          "split[a][b];[a]palettegen[p];[b][p]paletteuse"
+          % (args.gif_speed, args.gif_fps, args.gif_width))
 
     subprocess.run([
-        "ffmpeg", "-y", "-t", str(args.gif_seconds), "-i", args.out, "-i", palette,
-        "-filter_complex", "fps=%d,scale=%d:-1:flags=lanczos[x];[x][1:v]paletteuse"
-                           % (args.gif_fps, args.gif_width),
+        "ffmpeg", "-y", "-i", args.out,
+        "-vf", vf,
+        "-t", str(args.gif_seconds),
+        "-loop", "0",
         args.gif,
     ], check=True)
-
-    if os.path.isfile(palette):
-        os.remove(palette)
 
     print("")
     print("video : %s" % args.out)
     print("gif   : %s  (%.1f MB)"
           % (args.gif, os.path.getsize(args.gif) / (1024.0 * 1024.0)))
     print("")
-    print("If the GIF is over ~10 MB, reduce --gif-width or --gif-seconds;")
-    print("GitHub will not render very large files inline.")
+    print("If the GIF is over ~10 MB, reduce --gif-width, --gif-fps or")
+    print("--gif-seconds; GitHub will not render very large files inline.")
+    print("")
+    print("NOTE: the GIF plays at %.0fx real speed. Say so in the README caption "
+          "-- the\n      FPS counters are true, the wall-clock is not."
+          % args.gif_speed)
 
 
 if __name__ == "__main__":

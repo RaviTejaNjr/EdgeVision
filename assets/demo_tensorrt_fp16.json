@@ -1,0 +1,9 @@
+{
+  "runtime": "tensorrt",
+  "precision": "fp16",
+  "label": "TENSORRT FP16",
+  "frames": 300,
+  "mean_fps": 12.41,
+  "mean_ms": 80.58,
+  "video": "assets/demo_tensorrt_fp16.mp4"
+}

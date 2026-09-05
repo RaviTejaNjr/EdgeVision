@@ -1,0 +1,9 @@
+{
+  "runtime": "torchscript",
+  "precision": "fp32",
+  "label": "TORCHSCRIPT FP32",
+  "frames": 300,
+  "mean_fps": 8.215,
+  "mean_ms": 121.72,
+  "video": "assets/demo_torchscript_fp32.mp4"
+}

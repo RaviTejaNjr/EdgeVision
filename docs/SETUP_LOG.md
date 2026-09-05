@@ -963,12 +963,367 @@ nvidia-smi
 
 ---
 
+## Part 1 — Laptop: repository and test data
+
+### 23. Video toolchain
+
+```
+winget install Gyan.FFmpeg
+```
+
+⚠️ **Restart the shell afterwards.** winget modifies `PATH`, but the running
+terminal keeps its old copy — `ffmpeg -version` fails until a new one is opened.
+In VS Code, close the whole window, not just the terminal panel.
+
+**Inspect before transcoding:**
+
+```
+ffprobe -v error -show_entries stream=width,height,r_frame_rate,codec_name \
+        -show_entries format=duration -of default=noprint_wrappers=1 input.mp4
+```
+
+**Output:** h264, 1280×720, 30/1 fps, 34.67 s, plus an AAC audio stream.
+
+**Transcode to a reproducible input:**
+
+```
+ffmpeg -i Inference_Video.mp4 -vf scale=1280:720 -r 30 -c:v libx264 -crf 23 \
+       -preset medium -an data/test_video.mp4
+```
+
+| Flag | Why |
+|---|---|
+| `-vf scale=1280:720` | force exact resolution |
+| `-r 30` | force **constant** frame rate — the load-bearing one |
+| `-c:v libx264` | H.264; OpenCV reads it reliably |
+| `-crf 23` | quality, 0–51, lower is better |
+| `-an` | strip audio |
+
+**Why `-r 30` matters even though the source is already 30 fps:** phone and editor
+exports often use *variable* frame rate, dropping or duplicating frames during
+static scenes. "30 fps" is then nominal, and any FPS measurement inherits the
+variance.
+
+**Output:** `frame= 1040 ... time=00:00:34.60` — 1040 frames at 30 fps is exactly
+34.67 s, confirming constant frame rate.
+
+---
+
+### 24. Verify through OpenCV, not ffmpeg
+
+OpenCV uses different decoders, and the entire pipeline reads through it. A file
+ffmpeg writes happily can still fail to open in OpenCV or report a wrong frame
+count.
+
+```python
+cap = cv2.VideoCapture("data/test_video.mp4")
+print(cap.isOpened(), int(cap.get(cv2.CAP_PROP_FRAME_COUNT)))
+n = 0
+while cap.read()[0]:
+    n += 1
+print("actually read:", n)
+```
+
+| Check | Result |
+|---|---|
+| opened | True |
+| reported frames | 1040 |
+| **actually read** | **1040** |
+| fps | 30.0 |
+| size | 1280 × 720 |
+
+Reported and actual match — no container metadata quirks.
+
+---
+
+### 25. Git repository
+
+```
+git init
+git branch -M main                    # GitHub's default; avoids a push mismatch
+git remote add origin https://github.com/RaviTejaNjr/EdgeVision.git
+git add .
+git commit -m "..."
+git push -u origin main               # -u links local main to origin/main
+```
+
+**Empty directories do not exist to git.** It tracks files, not folders, so every
+otherwise-empty directory needs a placeholder:
+
+```
+type nul > app\.gitkeep        # Windows equivalent of `touch`
+```
+
+`app/` later got `__init__.py` instead, which serves the same purpose and makes
+the directory an importable package.
+
+**Chaining commands in cmd:** `&` runs each regardless of the previous result;
+`&&` stops at the first failure.
+
+See `docs/GIT_NOTES.md` for the remote-edit incident and the fetch/diff/pull
+pattern.
+
+---
+
+### 26. `app/__init__.py` — required, not optional
+
+```
+del app\.gitkeep
+type nul > app\__init__.py
+```
+
+`benchmark.py` does `from app import postprocess, preprocess`. **Python 3.6
+requires `__init__.py` for that**; newer versions are more forgiving via implicit
+namespace packages.
+
+Without it the code runs on the laptop and fails on the Nano — the worst kind of
+bug, because it appears only on the machine that matters.
+
+---
+
+### 27. Remaining laptop dependencies
+
+```
+pip install pyyaml psutil pytest
+```
+
+`pyyaml` is imported directly by `benchmark.py`. `psutil` provides peak memory —
+the code falls back to Linux's `resource` module, but Windows has no fallback.
+`pytest` runs `tests/test_parity.py` and will be what CI invokes at Part 10.
+
+*(All three were already present as Ultralytics dependencies.)*
+
+---
+
+## PROBLEM 4 — the laptop GPU ran at 10% of its clock
+
+**This invalidated every laptop measurement taken before it was found.**
+
+### Symptom
+
+Engine p95 rose from 29.90 ms (200 frames) to 71.61 ms (500 frames) against a p50
+of 27.07 — a 2.6× tail that appeared only in longer runs.
+
+### Wrong hypothesis 1 — thermal throttling
+
+The laptop's GPU fan was disconnected for noise, so this looked obvious.
+
+### Wrong hypothesis 2 — memory pressure
+
+`peak_mem_mb` had grown 3048 → 5108 MB, and 5 GB on a 4 GB card would mean
+spilling into shared system memory.
+
+### The diagnostic
+
+```
+nvidia-smi --query-gpu=timestamp,temperature.gpu,clocks.sm,utilization.gpu,memory.used \
+           --format=csv -l 1
+```
+
+Run in a second terminal alongside the benchmark. `-l 1` polls once per second.
+
+| Hypothesis | Evidence | Verdict |
+|---|---|---|
+| Thermal | 57 → 70 °C; Ampere throttles ~87 °C+ | ❌ |
+| GPU memory | flat at **1212 MiB** | ❌ |
+| **Clock speed** | **pinned at 210 MHz throughout** | ✅ |
+
+```
+nvidia-smi --query-gpu=clocks.max.sm,power.limit --format=csv
+→ 2100 MHz, [N/A]
+```
+
+**210 MHz against a 2100 MHz ceiling — exactly 10%**, while reporting 85%
+utilisation. Genuinely busy, just crawling.
+
+*(`power.limit` returning `[N/A]` is normal for laptop GPUs under WDDM; vendor
+firmware manages it rather than exposing it.)*
+
+### Reconnecting the fan made things WORSE
+
+| Stage | fan off | fan on |
+|---|---|---|
+| inference | 33.66 ms | 74.33 ms |
+| preprocess | 5.67 ms | 22.72 ms |
+| capture | 2.32 ms | 6.75 ms |
+| postprocess | 2.19 ms | 7.86 ms |
+
+**The tell: CPU-only stages slowed 3–4× too.** Preprocessing and NMS never touch
+the GPU. Reconnecting a *GPU* fan cannot slow down NumPy — so the whole machine
+was slower, not the GPU.
+
+### Root cause: Windows "Whisper" power mode
+
+A vendor quiet profile capping both CPU and GPU clocks. Active for every run up to
+that point.
+
+```
+powercfg /getactivescheme
+```
+
+**Fix:** Windows Settings → System → Power & battery → Power mode → **Best
+performance**. On mains.
+
+### Result
+
+| Power state | GPU clock | Inference | Engine FPS | E2E FPS |
+|---|---|---|---|---|
+| Whisper | 210 MHz | 74.33 ms | 13.5 | 9.0 |
+| Balanced | ~550–1057 MHz | 18.16 ms | 55.1 | 31.4 |
+| **Best performance** | ~950–1057 MHz | **14.05 ms** | **71.2** | **41.1** |
+
+**5.3× from power settings alone**, identical code and hardware.
+
+### Deliberately not pursued further
+
+Even at Best performance the GPU peaks near 1057 MHz of 2100 and utilisation tops
+out at ~42% — a vendor profile still caps it.
+
+Not chased, because at 42% utilisation the GPU is idle more than half the time,
+waiting on the CPU. Capture + preprocess + postprocess = **10.3 ms of CPU work**
+against 14.05 ms of GPU work. Raising the GPU clock shrinks the 14 ms and leaves
+the 10.3 ms untouched.
+
+### The fan was irrelevant
+
+Measured afterwards, three runs each on mains:
+
+| Condition | Inference |
+|---|---|
+| Fan on | 47.11 ± 1.72 ms |
+| Fan off | 48.80 ± 2.51 ms |
+
+Overlapping error bars. **No measurable effect on CPU inference.** Fan stays
+detached.
+
+---
+
+## PROBLEM 5 — battery mode costs 2.6× on CPU
+
+| State | Inference | E2E FPS | Sustained 60 s |
+|---|---|---|---|
+| Battery | **132.95 ms** | 6.23 | **4.88** |
+| Mains | **51.54 ms** | 15.54 | — |
+
+**Windows caps CPU clocks hard on battery regardless of the "Best performance"
+setting.**
+
+The progress log shows the collapse live: 74.9 → 313.0 → 214.9 → 204.6 ms. Normal
+for ~100 frames, then the battery power cap engages.
+
+`fps_sustained_last_60s` caught it — 4.88 against a mean of 6.23. First time that
+column earned its place.
+
+**Consequence: every laptop measurement must be on mains.**
+
+---
+
+## Measurement protocol
+
+Adopted after Problems 4 and 5, and followed for every row in `results/speed.csv`:
+
+1. **Mains power.** Battery costs 2.6× on CPU.
+2. **Highest performance profile**, recorded via `--host-profile`.
+3. **Three runs minimum per configuration.** Two cannot establish a difference
+   below ~15% — an 8.4% FP16-vs-FP32 gap was observed, withdrawn as noise, then
+   confirmed once 8 and 6 samples existed.
+4. **GPU runs before CPU runs**, so CPU load does not heat the machine and skew
+   the GPU measurements.
+5. **~30 s between runs**, so each starts from a similar thermal state.
+6. On the Jetson: `nvpmodel` mode set and `jetson_clocks` applied, both recorded.
+
+---
+
+### 28. Harness change: `--host-profile`
+
+Added after the fact, because two runs of identical code differed by **5×** with
+nothing in the CSV to explain it.
+
+```
+python benchmarks/benchmark.py --runtime pytorch --device cuda --precision fp32 \
+    --frames 500 --host-profile best-performance-mains --notes "run 1"
+```
+
+On the Jetson `nvpmodel -q` reports power state automatically; **Windows exposes
+nothing equivalent**, so it is supplied explicitly and folded into the config
+hash.
+
+Existing rows were moved to `results/speed_exploratory.csv` rather than deleted —
+they are the evidence behind Problem 4. See `results/README.md`.
+
+---
+
+## Part 3 — Validation
+
+### 29. ONNX export parity
+
+```
+pytest tests/test_parity.py -v
+→ 6 passed in 3.24s
+```
+
+Five frames through both PyTorch and ONNX Runtime, comparing raw
+`(1, 84, 8400)` tensors at `atol/rtol = 1e-3`.
+
+**Why not exact equality:** FP32 arithmetic is not associative. Two runtimes that
+fuse or reorder operations differently will not produce bit-identical output.
+
+**`test_class_scores_are_probabilities`** asserts the 80 class columns lie in
+[0, 1]. If the head had an objectness column the columns would be offset by one
+and the last would hold unbounded box data — so this passing confirms the
+anchor-free layout.
+
+---
+
+### 30. Decoder validation against Ultralytics
+
+```
+python evaluation/validate_decoder.py --frames 10 --save-overlay
+```
+
+| Metric | Result |
+|---|---|
+| Agreement (IoU ≥ 0.9, same class) | **99.2%** — 117 of 118 |
+| Box coordinate error, mean | **0.546 px** |
+| Box coordinate error, max | 8.485 px |
+| Score error, mean | 0.018 |
+
+**Sub-pixel mean error establishes the letterbox-undo maths is correct.**
+
+**Every unmatched detection fell between conf 0.252 and 0.287**, against a 0.25
+threshold — borderline cases, as predicted.
+
+Visual inspection of the overlays showed ours found a person Ultralytics missed
+(frame 0, conf 0.257), and produced three tight boxes on individual kites where
+Ultralytics produced one enormous box across the whole bunting line (frame 808).
+The latter is an NMS difference, and ours is the more sensible output.
+
+**The max errors are preprocessing, not decoding.** Ultralytics pads to a stride
+multiple with a rectangular letterbox; `app/preprocess.py` always pads to a square
+640×640. Different input pixels, slightly different predictions. Square padding is
+correct here — it is what the ONNX export declares and what the engine was built
+for.
+
+Tolerances set to 10 px / 0.2 accordingly, with the reasoning in the source.
+
+**Bug found:** the first run crashed on frame 2 with
+`Input type (torch.FloatTensor) and weight type (torch.cuda.FloatTensor) should be
+the same`. **`yolo.predict()` moves the underlying model to CUDA as a side
+effect**, so the next raw call fed a CPU tensor to a GPU model. Fixed by pinning
+the model, input tensor and `predict()` to CPU explicitly.
+
+---
+
 ## Still to do
 
-- [ ] Part 1: repo scaffold, `configs/params.yaml`, record and normalise test video
-- [ ] Part 2: `benchmark.py` — cold-start vs steady-state split, per-stage timing
+- [ ] **Part 4:** port to the Nano — NVIDIA torch wheel, torchvision from source,
+      YOLOv5 dependencies pinned for Python 3.6. **Timeboxed to 2 hours**; fall
+      back to Option B if torchvision does not compile
+- [ ] Check the preprocessing-share prediction: CPU stages are ~40% of the frame
+      on an i9; on four ARM Cortex-A57 cores they should dominate
 - [ ] Try `--workspace=512` on the Nano as an additional benchmark row
 - [ ] Build a TensorRT engine on the **laptop** too — separate engine from the same
       ONNX, its own results row
-- [ ] Fix the CUDA context teardown properly in `infer_trt.py` (see Problem 3)
+- [ ] Fix the CUDA context teardown properly in `app/backends.py` — **already
+      written in**, but verify it works on device (see Problem 3)
 - [ ] Re-image the SD card after Part 6, not before

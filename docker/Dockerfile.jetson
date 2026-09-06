@@ -23,6 +23,12 @@ FROM nvcr.io/nvidia/l4t-base:r32.7.1
 # Fail the build rather than hang on an interactive prompt.
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Without a locale, Python 3.6 defaults to ASCII for file I/O and fails on any
+# non-ASCII character -- an em dash in a YAML comment is enough. The host has a
+# UTF-8 locale; the container does not inherit one.
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
 # CUDA is in the base image but not on PATH by default. PyCUDA's build needs
 # nvcc; the runtime needs the shared libraries.
 ENV PATH=/usr/local/cuda/bin:${PATH}

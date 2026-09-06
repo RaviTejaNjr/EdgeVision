@@ -95,24 +95,29 @@ regarding the clock ceiling.
 
 ### Deployment overhead — container vs bare metal
 
-Three runs each, same board, same engine, same video. Container numbers come from
-`app/run.py` inside the image; bare-metal numbers from `benchmarks/benchmark.py`.
+Six runs in one session, three of each, **both measured with the same harness** —
+`benchmarks/benchmark.py`, mounted into the container rather than baked in.
 
-| | Bare metal | Container | Difference |
+| Metric | Bare metal | Container | Difference |
 |---|---|---|---|
-| Inference | 50.64 ± 0.12 ms | 50.50 ± 0.06 ms | **−0.27%** |
-| End-to-end FPS | 12.60 | 12.55 | −0.34% |
-| p95 inference | 50.93 ms | 50.81 ms | — |
-| Objects per frame | 9 | 9 | identical |
+| Inference | 50.77 ± 0.03 ms | 50.84 ± 0.02 ms | **+0.14%** |
+| End-to-end FPS | 12.57 ± 0.01 | 12.49 ± 0.02 | **−0.66%** |
+| **Preprocess** | 13.95 ± 0.01 ms | **14.30 ± 0.04 ms** | **+2.48%** |
+| Peak memory | 1065 MB | 1109 MB | +4.06% |
+| Detections | 8.32 | 8.32 | identical |
 
-**Containerisation costs nothing measurable** — both differences sit below the
-0.23% run-to-run CV.
+**The GPU path is free. The 0.66% end-to-end cost is entirely CPU-side.**
 
-Expected, since Docker is process isolation via kernel namespaces and cgroups
-rather than virtualisation: there is no hypervisor between the code and the GPU,
-and the nvidia runtime bind-mounts device nodes and libraries directly. But
-"expected" and "measured" are different claims, and plenty of people assume
-containers cost 5–10% on GPU workloads.
+Inference differs by 0.14% — inside the noise, exactly as the
+namespaces-not-virtualisation model predicts. But **preprocessing is 2.48% slower**,
+well outside the 0.08% CV, and preprocessing is `cv2.resize`, colour conversion and
+NumPy transposes.
+
+The likely cause is OpenCV: the container has the plain Debian `python3-opencv`,
+while the host has JetPack's 4.1.1, almost certainly built with NEON optimisations
+the Debian package lacks. A specific, explainable cost rather than a container tax.
+
+*CVs of 0.03–0.08% — the tightest measurements in this project.*
 
 ### Pipeline breakdown
 
@@ -588,9 +593,17 @@ traffic. On a bandwidth-bound board that is the whole game.
 against the laptop's 2.8–7.7%. Clocks locked, nothing else running, and a power
 mode that is explicit and honoured.
 
-**Containerisation costs nothing.** 50.50 ms in the container against 50.64 ms
-bare metal — a 0.27% difference, below the run-to-run CV. Docker is process
-isolation, not virtualisation, so there is no layer between the code and the GPU.
+**Containerisation costs 0.66% end-to-end, and none of it is GPU overhead.**
+Inference differs by 0.14% — inside the noise — while preprocessing is 2.48%
+slower. The container's OpenCV is the plain Debian build; the host has JetPack's,
+likely with NEON optimisations. Docker is process isolation rather than
+virtualisation, so nothing sits between the code and the GPU; the cost is in a
+userspace library, not the runtime.
+
+**An earlier version of this comparison had the wrong sign.** Container numbers
+came from `app/run.py` and bare-metal numbers from `benchmarks/benchmark.py` — two
+instruments. Re-measuring both with the same harness reversed the result. The
+error was small, but it would have been published as "containerisation is free".
 
 **Three implicit host dependencies only appeared inside the container.** Ubuntu's
 stock pip 9.0.1 predates `--no-build-isolation`; the container has no locale, so

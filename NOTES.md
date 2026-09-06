@@ -1683,15 +1683,90 @@ That is **page-cache warming**, not container overhead — the engine file had n
 been read recently. Same effect seen on the laptop, where cold start varied
 10,295 → 3,811 ms for identical code.
 
-### A note on measurement provenance
+### The first comparison was wrong — and the correction is the lesson
 
-`app/run.py` reports to stdout; it does **not** append to `results/speed.csv`.
-Deliberate: it is a service, not the measurement harness, and `benchmarks/` is not
-copied into the image.
+The initial container figures came from `app/run.py`; the bare-metal figures from
+`benchmarks/benchmark.py`. **Two different instruments**, which is exactly what the
+whole results table is built to avoid.
 
-Mixing its numbers into `speed.csv` would break the one-instrument rule the whole
-results table rests on. The container rows are reported separately and labelled as
-coming from `app/run.py`.
+That comparison said the container was 0.27% *faster*. Re-measuring both with the
+same harness, in one session, showed the opposite.
+
+### Doing it properly
+
+`benchmarks/` is mounted at run time rather than copied into the image, so the
+harness runs inside the container without being shipped in it:
+
+```bash
+docker run --rm \
+    -v $(pwd)/models:/app/models \
+    -v $(pwd)/data:/app/data \
+    -v $(pwd)/results:/app/results \
+    -v $(pwd)/benchmarks:/app/benchmarks \
+    --entrypoint python3 \
+    edgevision:latest /app/benchmarks/benchmark.py \
+    --runtime tensorrt --precision fp16 --frames 500 \
+    --host-profile jetson-10w-clocks-locked-fan-off \
+    --clocks-locked true --fan false --deployment container --notes "container 1"
+```
+
+`--entrypoint python3` overrides the Dockerfile's ENTRYPOINT, which points at
+`run.py`.
+
+A **`--deployment`** field was added to `benchmark.py` and folded into the config
+hash, so container and bare-metal rows are distinguishable rather than colliding on
+an otherwise identical config. The schema went 37 → 38 columns, so the previous
+rows moved to `results/speed_part2to5.csv`.
+
+### THE CORRECTED RESULT
+
+Six runs in one session — three of each, same harness, same board state.
+
+| Metric | Bare metal | Container | Difference |
+|---|---|---|---|
+| Inference | 50.77 ± 0.03 ms | 50.84 ± 0.02 ms | **+0.14%** |
+| End-to-end FPS | 12.57 ± 0.01 | 12.49 ± 0.02 | **−0.66%** |
+| **Preprocess** | 13.95 ± 0.01 ms | **14.30 ± 0.04 ms** | **+2.48%** |
+| Peak memory | 1065 MB | 1109 MB | +4.06% |
+| Detections | 8.32 | 8.32 | identical |
+
+**CVs of 0.03–0.08%** — the tightest measurements in the project. Six runs, one
+session, stable board.
+
+### The cost is not GPU overhead
+
+**Inference is +0.14%, inside the noise.** The GPU path really is free, exactly as
+the namespaces-not-virtualisation model predicts.
+
+**Preprocessing is +2.48%**, well outside the CV of either set. That is CPU work —
+`cv2.resize`, colour conversion, NumPy transposes.
+
+**The likely cause is OpenCV.** The container has the plain Debian
+`python3-opencv`; the host has JetPack's 4.1.1, almost certainly built with NEON
+optimisations the Debian package lacks. A specific, explainable cost — not a
+container tax.
+
+**The +44 MB** is the container's own OpenCV and NumPy loaded alongside the host's,
+rather than shared.
+
+### Two artefacts of running inside a container
+
+**`power_mode` records `n/a`** — `nvpmodel` is not available inside the container.
+Harmless here because `--host-profile` records it explicitly, which is exactly why
+that field exists.
+
+**`git_commit` records `unknown`** — no git in the image. The bare-metal rows carry
+a real SHA. Worth knowing when reading the CSV.
+
+### Why this correction matters more than the number
+
+The one-instrument rule was written into the plan at Part 2 as a principle. This is
+the first time it was actually violated, and it produced a wrong conclusion with the
+wrong sign.
+
+**It was not a large error** — 0.27% the wrong way. But it would have been reported
+as "containerisation is free" when the honest answer is "the GPU path is free; the
+container's OpenCV costs about 2.5% on preprocessing".
 
 ---
 

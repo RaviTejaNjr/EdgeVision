@@ -41,10 +41,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# --no-build-isolation is required. PyCUDA declares numpy==1.12.1 as a build
-# dependency; pip would create an isolated environment and try to compile that
-# 2017 release, which includes <xlocale.h> -- a header removed from glibc years
-# ago. The flag makes it use the numpy installed above instead.
+# Ubuntu ships pip 9.0.1, which predates --no-build-isolation (added in pip 10).
+# Capped below 21.0, which drops Python 3.6 support entirely.
+RUN pip3 install --no-cache-dir --upgrade "pip<21.0" setuptools wheel
+
+# --no-build-isolation is required: PyCUDA declares numpy==1.12.1 as a build
+# dependency, and pip would create an isolated environment and try to compile
+# that 2017 release, which includes <xlocale.h> -- removed from glibc years ago.
 RUN pip3 install --no-cache-dir --no-build-isolation "pycuda==2020.1"
 
 WORKDIR /app

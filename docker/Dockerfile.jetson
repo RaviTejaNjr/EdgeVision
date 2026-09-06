@@ -54,7 +54,9 @@ RUN pip3 install --no-cache-dir --upgrade "pip<21.0" setuptools wheel
 # --no-build-isolation is required: PyCUDA declares numpy==1.12.1 as a build
 # dependency, and pip would create an isolated environment and try to compile
 # that 2017 release, which includes <xlocale.h> -- removed from glibc years ago.
-RUN pip3 install --no-cache-dir --no-build-isolation "pycuda==2020.1"
+# `six` is imported by pycuda.driver at runtime but not declared as a dependency.
+# The host had it from another package; the container does not.
+RUN pip3 install --no-cache-dir --no-build-isolation "pycuda==2020.1" six
 
 WORKDIR /app
 

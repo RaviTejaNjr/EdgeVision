@@ -129,6 +129,7 @@ def run(args, cfg):
         "clocks_locked": args.clocks_locked,
         "fan": args.fan,
         "host_profile": args.host_profile,
+        "deployment": args.deployment,
     }
     cfg_hash = config_hash(cfg_fields)
 
@@ -256,6 +257,7 @@ def run(args, cfg):
         "clocks_locked": args.clocks_locked,
         "fan": args.fan,
         "host_profile": args.host_profile,
+        "deployment": args.deployment,
 
         "warmup_frames": args.warmup,
         "n_frames": n,
@@ -342,7 +344,7 @@ def main():
     p = argparse.ArgumentParser(description="EdgeVision benchmark harness")
     p.add_argument("--config", default="configs/params.yaml")
     p.add_argument("--runtime", required=True,
-                   choices=["pytorch", "torchscript", "onnxruntime", "tensorrt"])
+                   choices=["pytorch", "onnxruntime", "tensorrt"])
     p.add_argument("--precision", default="fp32", choices=["fp32", "fp16"])
     p.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     p.add_argument("--source", default=None)
@@ -352,6 +354,11 @@ def main():
     p.add_argument("--power-mode", dest="power_mode", default=None)
     p.add_argument("--clocks-locked", dest="clocks_locked", default="false")
     p.add_argument("--fan", default="true")
+    p.add_argument("--deployment", default="bare-metal",
+                   choices=["bare-metal", "container"],
+                   help="where this ran. Part of the config hash, so container "
+                        "and bare-metal rows are distinguishable rather than "
+                        "colliding on an otherwise identical config.")
     p.add_argument("--host-profile", dest="host_profile", default="unknown",
                    help="host power/performance state, e.g. best-performance, "
                         "whisper, jetson-10w. Part of the config hash: the same "

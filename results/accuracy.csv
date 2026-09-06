@@ -1,0 +1,4 @@
+config_hash,timestamp,git_commit,model,runtime,precision,device,input_res,n_images,n_detections,AR_max1,AR_max10,AR_max100,mAP50,mAP50_95,mAP75,mAP_large,mAP_medium,mAP_small,notes
+1a301c65,2026-09-06T18:30:13,9d3271a-dirty,yolov5nu,torchscript,fp32,nano,640,5000,530418,0.29102,0.46081,0.49267,0.50048,0.33432,0.35289,0.46828,0.36878,0.15306,
+d638a86f,2026-09-06T18:31:25,9d3271a-dirty,yolov5nu,tensorrt,fp32,nano,640,5000,530417,0.29102,0.4608,0.49266,0.50048,0.33432,0.3529,0.46828,0.36878,0.15306,
+6b8fa777,2026-09-06T18:32:15,9d3271a-dirty,yolov5nu,tensorrt,fp16,nano,640,5000,531012,0.29079,0.4603,0.49216,0.50047,0.334,0.35119,0.46869,0.36824,0.15277,

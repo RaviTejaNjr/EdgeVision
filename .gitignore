@@ -17,6 +17,7 @@ data/*.avi
 data/coco/
 assets/demo_tensorrt_*.mp4
 assets/demo_torchscript_*.mp4
+results/detections_*.json
 
 # Editor
 .vscode/

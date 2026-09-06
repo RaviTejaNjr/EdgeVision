@@ -1,0 +1,10 @@
+data/
+results/
+venv/
+.git/
+assets/
+docs/
+*.md
+__pycache__/
+*.pyc
+.vscode/

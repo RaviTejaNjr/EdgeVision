@@ -1603,10 +1603,190 @@ Three runs each of TorchScript FP32 and TensorRT FP16:
 
 ---
 
+## Part 5 — Engines and accuracy
+
+### 43. Recovering from "cable unplugged" — the real fix
+
+Third SSH failure. The diagnostic chain, in order:
+
+```bash
+# 1. Is the board alive at all?
+ping 192.168.137.244                    # timed out
+
+# 2. Attach a monitor. Login prompt at 9.4 s -> the OS is fine.
+#    tegra-i2c "no acknowledge from address 0x50" = probing for a camera EEPROM
+#    that is not plugged in. Harmless.
+
+# 3. Does the interface have an address?
+ip addr show eth0
+# -> state UP, LOWER_UP, but NO inet line. Only link-local IPv6.
+
+# 4. Is DHCP being answered?
+sudo dhclient -v eth0
+# -> DHCPDISCOVER x8 with growing backoff, no DHCPOFFER.
+#    Request going out, nothing replying.
+```
+
+**The cause was on the Windows side:** the Ethernet adapter reported **"Network
+cable unplugged"** while the Nano reported `LOWER_UP`.
+
+**The fix — and it is the first thing to try next time:**
+
+`ncpa.cpl` → right-click Ethernet → **Disable**, wait, → **Enable**.
+
+Re-seating the cable at both ends did nothing. Windows had the adapter in a
+phantom state, probably after sleep/wake. **This explains all three earlier
+failures** — never a boot problem, never a DHCP race.
+
+---
+
+### 44. Building engines with a script
+
+```bash
+python3 models/build_trt_engine.py --precision fp16
+python3 models/build_trt_engine.py --precision fp32
+```
+
+Replaces the day-zero `trtexec` invocation. Reproducible, and it prints the
+platform capability flags:
+
+```
+platform_has_fast_fp16 : True
+platform_has_fast_int8 : False
+```
+
+**That second line is TensorRT's own API declaring INT8 unavailable** — a far
+stronger citation than documentation, and reproducible by anyone with the board.
+
+| Engine | Build time | Size |
+|---|---|---|
+| FP32 | 151.0 s | 22.9 MB |
+| FP16 | 362.6 s | 11.8 MB |
+
+**FP16 takes 2.4× longer to build** — the auto-tuner has both precisions available
+per layer, so a larger search space. The engine is half the size because FP32
+weights are 4 bytes and FP16 are 2.
+
+⚠️ **The rebuilt engine was 2.2% faster than the spike-built one** (50.64 vs
+51.76 ms, five times the CV). Same ONNX, same script, same workspace — but built
+headless on an idle board with more free memory. **TensorRT auto-tuning is
+sensitive to the state of the machine it runs on.**
+
+---
+
+### 45. Engine selection by precision
+
+⚠️ **A bug that produced a wrong row rather than a crash.**
+
+`--precision fp32` returned 50.74 ms — identical to FP16. `backends.py` read
+`cfg["model"]["engine"]`, a single hardcoded path pointing at the FP16 file. The
+flag reached the CSV label but never reached engine selection.
+
+**Fix — two keys and an explicit failure:**
+
+```yaml
+  engine_fp16: models/yolov5nu_fp16.engine
+  engine_fp32: models/yolov5nu_fp32.engine
+```
+
+```python
+key = "engine_%s" % precision
+if key not in cfg["model"]:
+    raise ValueError("no %s in config -- build it with "
+                     "models/build_trt_engine.py --precision %s" % (key, precision))
+```
+
+**The raise matters.** A missing engine should stop the run, not quietly
+substitute a different one.
+
+Same family as `clocks_locked` recording `false` while clocks were locked, and
+`peak_mem_mb` measuring host RSS. **A field that can silently disagree with
+reality is worse than no field**, because it looks like evidence.
+
+---
+
+### 46. COCO evaluation — the three-script split
+
+```bash
+# laptop: download and select
+pip install pycocotools
+python evaluation/prepare_coco.py --n 5000        # ~250 MB annotations + 777 MB images
+scp -r data/coco raviteja@192.168.137.244:~/EdgeVision/data/
+
+# Nano: run inference, write COCO-format detections
+python3 evaluation/run_coco_detections.py --runtime tensorrt --precision fp16 --subset 5000
+
+# laptop: score
+scp raviteja@192.168.137.244:~/EdgeVision/results/detections_*.json results\
+python evaluation/coco_eval.py --detections results/detections_tensorrt_fp16.json \
+    --runtime tensorrt --precision fp16 --device nano --subset 5000
+```
+
+**Why split across machines:** `pycocotools` compiles a C extension, and keeping
+it on the laptop avoids another build on the board. It also means one scoring
+implementation is used for every runtime.
+
+Add to `.gitignore` — the detection JSONs are 49 MB each and regenerable:
+
+```
+data/coco/
+results/detections_*.json
+```
+
+⚠️ **Evaluation runs at conf 0.001, not the runtime's 0.25.** mAP is the area
+under the precision–recall curve; high-recall points come only from low-confidence
+detections. 0.001 with `max_det=300` is the COCO convention that every published
+figure uses. *(Detections averaged 106.2 per image, so the cap was never hit.)*
+
+⚠️ **COCO category ids are not 0..79.** The original 91-class set had 11 removed,
+so ids skip 12, 26, 29, 30, 45, 66, 68, 69, 71, 83, 91. Model index 11 maps to
+category **13**. A naive `cls + 1` would score every detection against the wrong
+class and produce a plausible near-zero mAP rather than an error.
+
+**Timing:** ~9 min per configuration on the Nano at 6.4–10 img/s; ~40 s per
+configuration to score on the laptop.
+
+**Results:** mAP@50-95 of 0.3343 (TorchScript FP32 and TensorRT FP32, identical to
+four decimal places) and 0.3342 (TensorRT FP16).
+
+---
+
+### 47. The fan has a thermal governor
+
+```bash
+sudo sh -c 'echo 255 > /sys/devices/pwm-fan/target_pwm'
+cat /sys/devices/pwm-fan/target_pwm
+```
+
+**Manual writes do not stick.** Set to 255, it reset to 0 on its own; later, under
+sustained load, it rose to 80 without intervention at roughly 50 °C.
+
+```bash
+systemctl list-units | grep -i fan
+# -> only ubuntu-fan.service, which is CONTAINER NETWORKING (Fabric Area Network),
+#    not cooling. Unfortunate name collision.
+```
+
+No userspace daemon to stop — the control lives in the kernel `pwm-fan` driver or
+`nvpmodel`'s thermal policy.
+
+**Consequence for Part 7:** a ten-minute run will cross the threshold and the
+governor will engage partway through. Sustained measurements will therefore be
+taken **with stock thermal management active** — which is the more honest claim
+anyway, since it is how the board behaves in service.
+
+*(Earlier runs peaked at 42–49.5 °C, just under the trigger, so they were
+genuinely fan-off. But `--fan false` means "the governor did not engage", not "the
+fan was disabled".)*
+
+---
+
 ## Still to do
 
-- [ ] **Part 5:** rebuild the engine properly with `build_trt_engine.py`; add
-      TensorRT FP32 for a same-precision comparison; measure mAP — NVIDIA torch wheel, torchvision from source,
+- [ ] **Part 6:** Dockerfile on `l4t-base:r32.7.1`, built **on the Nano**;
+      TensorRT-only, no torch; measure bare metal vs container overhead
+- [ ] Make the repo public, add topics and an About description
+- [ ] Re-add the CI badge once `.github/workflows/ci.yml` goes green — NVIDIA torch wheel, torchvision from source,
       YOLOv5 dependencies pinned for Python 3.6. **Timeboxed to 2 hours**; fall
       back to Option B if torchvision does not compile
 - [ ] Check the preprocessing-share prediction: CPU stages are ~40% of the frame

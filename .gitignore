@@ -22,6 +22,11 @@ results/detections_*.json
 # Editor
 .vscode/
 .idea/
+TODO.md
+GIT_NOTES.md
+docs/GIT_NOTES.md
+UNDERSTANDING.md
+docs/UNDERSTANDING.md
 
 # OS
 Thumbs.db

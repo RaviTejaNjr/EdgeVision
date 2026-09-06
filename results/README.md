@@ -10,7 +10,8 @@ rather than gitignored.
 | `speed.csv` | growing | 37 columns | The clean record. Every run carries a `host_profile` describing the machine's power state. |
 | `speed_exploratory.csv` | 23 | 36 columns | Earlier laptop runs, kept for the findings they produced. **No `host_profile` column.** |
 | `raw/*.npz` | one per run | — | Per-frame timing arrays, keyed by `run_id` |
-| `accuracy.csv` | — | — | mAP per configuration. Added at Part 5. |
+| `accuracy.csv` | one per config | 20 columns | mAP from `pycocotools` on the full COCO val2017 set |
+| `detections_*.json` | — | — | **Gitignored.** 49 MB each, regenerable from `evaluation/run_coco_detections.py` |
 
 ## Why there are two speed files
 
@@ -80,6 +81,57 @@ this column read 5115 MB, `nvidia-smi` showed GPU memory flat at 1212 MiB.
 **`throttled` is filled in by hand** after inspecting a run. It is not detected
 automatically.
 
+## Reading `accuracy.csv`
+
+One row per **configuration**, not per run — accuracy is deterministic, so there
+is nothing to average. It joins to `speed.csv` on `config_hash`.
+
+**The hash deliberately excludes power state.** mAP does not depend on clock
+speed, so one accuracy row correctly maps to several speed rows taken at different
+power profiles.
+
+### Evaluation protocol
+
+| Setting | Value | Why |
+|---|---|---|
+| Dataset | full COCO val2017 — 5,000 images, 36,781 annotations | a 500-image subset could not resolve differences below ~1 mAP point, and the expected FP16 difference was far smaller |
+| Confidence threshold | **0.001** | mAP integrates the precision–recall curve; high-recall points come only from low-confidence detections. The runtime uses 0.25 — a different job |
+| NMS IoU | 0.45 | as configured for the runtime |
+| Letterbox | square 640×640 | what the ONNX export declares and the engine was built for |
+| Max detections | uncapped (COCO convention is 300) | averaged 106.2 per image, so the cap was never reached |
+
+0.001 with `max_det=300` is the standard used by Ultralytics, MMDetection,
+Detectron2 and the original YOLO papers. Evaluating at 0.25 would give numbers
+that are internally consistent but not comparable with any published figure.
+
+### Current results
+
+| Runtime | Precision | mAP@50-95 | mAP@50 | mAP@75 | Detections |
+|---|---|---|---|---|---|
+| TorchScript | FP32 | 0.3343 | 0.5005 | 0.3529 | 530,418 |
+| TensorRT | FP32 | 0.3343 | 0.5005 | 0.3529 | 530,417 |
+| TensorRT | FP16 | 0.3342 | 0.5003 | 0.3529 | 531,012 |
+
+TorchScript and TensorRT FP32 are **identical to four decimal places** and differ
+by one detection out of 530,418. FP16 costs **0.0001 mAP@50-95**.
+
+Ultralytics publishes 0.343 for `yolov5nu`; the 0.9-point gap is the square vs
+rectangular letterbox difference noted above.
+
+### Regenerating
+
+```bash
+python evaluation/prepare_coco.py --n 5000                    # laptop, one-off
+python3 evaluation/run_coco_detections.py \
+    --runtime tensorrt --precision fp16 --subset 5000         # Nano, ~9 min
+python evaluation/coco_eval.py \
+    --detections results/detections_tensorrt_fp16.json \
+    --runtime tensorrt --precision fp16 --device nano --subset 5000
+```
+
+The split is deliberate: `pycocotools` compiles a C extension, so scoring stays on
+the laptop and one implementation scores every runtime.
+
 ## Reproducing a row
 
 Every row can be regenerated from its own fields:
@@ -114,12 +166,20 @@ Established after the power-profile findings, and followed for every row in
 
 | Configuration | n | Inference | CV |
 |---|---|---|---|
+| **Nano TensorRT FP32** | 3 | 70.89 ± 0.01 ms | **0.014%** |
+| **Nano TensorRT FP16** | 3 | 50.64 ± 0.12 ms | 0.23% |
+| Nano TorchScript FP32 | 3 | 93.15 ± 0.47 ms | 0.50% |
 | Laptop GPU FP32 | 8 | 13.94 ± 1.08 ms | 7.7% |
 | Laptop GPU FP16 | 6 | 15.11 ± 0.42 ms | 2.8% |
 | Laptop CPU FP32 | 6 | ~47.5 ms | ~4% |
 
-FP32 is roughly 2.7× noisier than FP16, consistent with it pushing the GPU harder
-and hitting the power ceiling more often.
+**The Nano is up to 500× more reproducible than the laptop.** Locked clocks,
+nothing else running, and a power mode that is explicit and honoured. A
+constrained embedded board turns out to be a far better measurement instrument
+than a general-purpose laptop.
+
+On the laptop, FP32 is roughly 2.7× noisier than FP16 — consistent with it
+pushing the GPU harder and hitting the power ceiling more often.
 
 **Any comparison smaller than the relevant CV should not be treated as a
 difference.**

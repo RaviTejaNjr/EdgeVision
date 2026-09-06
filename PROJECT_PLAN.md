@@ -4,7 +4,9 @@ Production edge AI deployment on an NVIDIA Jetson Nano 2GB: take a
 pretrained object detector, optimise it for constrained hardware, deploy it
 reproducibly, and measure what it actually costs.
 
-**Status:** Part 0.5 complete — TensorRT path verified end to end on the board
+**Status:** Parts 0–5 complete. TensorRT FP16 measured **1.84× faster** than
+TorchScript FP32 for a **0.03% mAP loss** on the full COCO validation set.
+Part 6 (Docker) is next, and applications go out after it.
 **Owner:** Ravi Teja Gudupu
 **Started:** August 2026
 
@@ -46,19 +48,21 @@ already finished.
 
 ### Success criteria for v1.0
 
-- [ ] Environment documented (Part 0 report committed)
-- [ ] PyTorch baseline measured **on the Nano** (laptop rows optional reference)
-- [ ] ONNX export with numerical parity verified
-- [ ] TensorRT FP32 and FP16 engines built on-device and measured
-- [ ] **Engine throughput and end-to-end throughput reported separately**
-- [ ] Accuracy verified at every conversion step on a fixed COCO subset
-- [ ] **ΔmAP, Δprecision, Δrecall reported against the FP32 baseline**
-- [ ] Bare-metal vs Docker overhead measured and reported
+- [x] Environment documented (Part 0 report committed)
+- [x] PyTorch baseline measured **on the Nano** — via TorchScript, since
+      Ultralytics cannot run on Python 3.6
+- [x] ONNX export with numerical parity verified — 6 tests passing
+- [x] TensorRT FP32 and FP16 engines built on-device and measured
+- [x] **Engine throughput and end-to-end throughput reported separately** —
+      19.75 vs 12.60 FPS
+- [x] Accuracy verified — full COCO val2017, 5,000 images, not a subset
+- [x] **ΔmAP reported against the FP32 baseline** — −0.0001 mAP@50-95
+- [ ] Bare-metal vs Docker overhead measured and reported ← **Part 6**
 - [ ] Sustained (not peak) throughput measured under thermal load
 - [ ] 5W vs 10W performance-per-watt comparison
-- [ ] Experiments tracked; every result traceable to a commit
+- [x] Experiments tracked; every result traceable to a commit
 - [ ] CI green, with an accuracy regression gate
-- [ ] README a stranger understands in 90 seconds
+- [x] README a stranger understands in 90 seconds
 
 ### Explicit non-goals for v1.0
 
@@ -426,8 +430,17 @@ Establish a clean intermediate representation; don't optimise aggressively yet.
 
 ---
 
-### Part 4 — Port the baseline to the Nano
-*~4 h, of which 2 are timeboxed*
+### Part 4 — Port the baseline to the Nano ✅
+*budgeted 4 h, took ~10 min*
+
+> **What actually happened.** The plan timeboxed the torch install at two hours
+> with Option B as a fallback, because torchvision compiling from source on a 2 GB
+> board was the single riskiest step. **torchvision turned out not to be needed at
+> all** — YOLOv5n is pure convolutions, so the TorchScript graph contains no
+> torchvision operators and `torch.jit.load` works with torch alone.
+>
+> The saving came from choosing **TorchScript over cloning YOLOv5**, which
+> sidestepped the entire Python 3.6 dependency-pinning exercise. See §11.
 
 **Option A (chosen): on-device PyTorch baseline with YOLOv5n.**
 
@@ -741,6 +754,13 @@ infrastructure hosted on the Nano, multi-camera, SLAM, large segmentation models
 
 | Decision | Reason |
 |---|---|
+| TorchScript for the on-device PyTorch baseline | Ultralytics needs Python 3.8+; TensorRT bindings are 3.6-only. TorchScript is self-contained, needs only torch, and is what production deployment looks like anyway |
+| Full COCO val2017, not a 500-image subset | At 500 images, differences below ~1 mAP point are indistinguishable from sampling noise — and the expected FP16 difference was far smaller. Sample size must match the effect size |
+| Evaluate at conf 0.001, not the runtime's 0.25 | mAP integrates the PR curve; high-recall points come only from low-confidence detections. 0.001 is the COCO convention every published figure uses |
+| Build a TensorRT **FP32** engine as a control | Without it, 1.84× mixes runtime and precision. With it: 1.31× runtime × 1.40× precision |
+| Score mAP on the laptop, not the Nano | `pycocotools` compiles a C extension; keeping it off the board avoids another build, and one implementation scores every runtime |
+| Engine selected by precision key, with an explicit raise | A single hardcoded path silently loaded FP16 for a run labelled FP32. A missing engine must stop the run, not substitute a different one |
+| Part 7 measures with the fan governor **active** | Manual `target_pwm` writes do not stick — a kernel-level governor engages around 50 °C. "Sustained performance under stock thermal management" is the more honest claim |
 | YOLOv5n, not YOLOv8n | Ultralytics needs Python 3.8+; TensorRT bindings on JetPack 4.6 are 3.6-only. Mutually exclusive, and TensorRT wins. YOLOv5 runs under 3.6 with NVIDIA's torch wheel |
 | Ultralytics stays on the laptop | Model handling, ONNX export and COCO evaluation don't need to run on the Nano |
 | Postprocessing written by hand in NumPy | The TensorRT path bypasses YOLOv5's Python code. Not a workaround — decoding raw output is a genuine skill signal |
@@ -768,6 +788,20 @@ infrastructure hosted on the Nano, multi-camera, SLAM, large segmentation models
 ---
 
 ## 12. Open questions
+
+**Answered so far:**
+
+- ~~Does torchvision compile on the Nano within the timebox?~~ **Not needed.**
+- ~~Does the hand-written NumPy postprocessing reproduce YOLOv5's detections?~~
+  **Yes** — 99.2% agreement, 0.546 px mean box error, and mAP within 0.9 points of
+  the published figure.
+- ~~How large is the gap between engine FPS and end-to-end FPS?~~ **36%** —
+  19.75 vs 12.60 FPS. CPU stages are 35% of the frame.
+- ~~Does preprocessing dominate on ARM?~~ **No** — the prediction failed. CPU
+  stages became a *smaller* share (40% → 35%) because inference scaled 3.2× while
+  they scaled 2.1–2.5×.
+
+**Still open:**
 
 - [ ] Does torchvision compile on the Nano within the 2-hour timebox, or does the
       project fall back to Option B?

@@ -1379,6 +1379,142 @@ per layer, so the search space is larger.
 
 ---
 
+## 2026-09-06 — Part 5 complete: the accuracy cost, measured
+
+### Full validation set, not a subset
+
+The plan called for a fixed 500-image COCO subset. Revised to the **full 5,000
+val2017 images** once the throughput was known.
+
+The reasoning: with 500 images, confidence intervals on mAP are wide enough that
+differences below roughly one point are indistinguishable from sampling noise —
+and the expected FP16 difference was *far* smaller than that. Detection counts
+already agreed to 0.1%, so a subset would have measured nothing.
+
+Cost: ~9 minutes of Nano inference per configuration, three configurations, and a
+777 MB one-off transfer. Worth it to remove "is this real or sampling noise" from
+the answer entirely.
+
+### Evaluation runs at conf 0.001, not 0.25
+
+Deliberate, and worth being able to explain.
+
+**mAP is the area under the precision–recall curve.** High-recall points come only
+from low-confidence detections. Cutting at the runtime's 0.25 truncates the curve
+and understates mAP — consistently across runtimes, but not comparably with any
+published figure.
+
+**0.001 with max_det=300 is the COCO convention** — Ultralytics, MMDetection,
+Detectron2 and the original YOLO papers all use it.
+
+| Purpose | Threshold |
+|---|---|
+| Deployment | 0.25 — clean output, not 106 boxes per frame |
+| Evaluation | 0.001 — the whole PR curve |
+
+That is why `params.yaml` says 0.25 while `run_coco_detections.py` overrides to
+0.001. Two different jobs.
+
+*(Detections averaged 106.2 per image, so the 300-detection cap was never hit.)*
+
+### The category id trap
+
+COCO category ids are **not** 0..79. The original 91-class set had 11 removed, so
+the ids skip: 12, 26, 29, 30, 45, 66, 68, 69, 71, 83, 91.
+
+Model index 11 maps to category **13**, not 12.
+
+A naive `cls + 1` would score every detection against the wrong class and produce
+a plausible-looking near-zero mAP rather than an error. The `COCO91` list in
+`run_coco_detections.py` was verified for length, uniqueness, ordering and gap
+positions before use.
+
+---
+
+## THE ACCURACY RESULT
+
+Full COCO val2017, 5,000 images, 36,781 annotations.
+
+| Runtime | Precision | mAP@50-95 | mAP@50 | mAP@75 | Detections | Inference | E2E FPS |
+|---|---|---|---|---|---|---|---|
+| TorchScript | FP32 | **0.3343** | 0.5005 | 0.3529 | 530,418 | 93.15 ms | 8.21 |
+| TensorRT | FP32 | **0.3343** | 0.5005 | 0.3529 | 530,417 | 70.89 ms | 10.04 |
+| TensorRT | FP16 | **0.3342** | 0.5003 | 0.3529 | 531,012 | 50.64 ms | 12.60 |
+
+### The headline
+
+> **TensorRT FP16 is 1.84× faster than TorchScript FP32 on a Jetson Nano 2GB,
+> for a 0.03% mAP loss** — 0.3343 → 0.3342 mAP@50-95 over the full 5,000-image
+> COCO validation set.
+
+### Three things this establishes
+
+**The TensorRT conversion is provably faithful.** TorchScript and TensorRT FP32
+give **identical mAP to four decimal places** — 0.3343, 0.5005, 0.3529 across all
+three metrics — and differ by **one detection out of 530,418**. Two completely
+different inference engines, the same numbers. Not "close enough": identical.
+
+**FP16 costs essentially nothing.** −0.0001 mAP@50-95, −0.0002 mAP@50, and
+mAP@75 unchanged at 0.3529. For 1.40× speed and 328 MB less memory.
+
+**The whole pipeline is validated end to end.** 0.3343 against Ultralytics'
+published **0.343** for `yolov5nu` — 0.9 points apart, and the gap is explained:
+Ultralytics evaluates with a rectangular stride-aligned letterbox and an explicit
+`max_det=300`, while this project pads to a square 640×640 because that is what
+the ONNX export declares and the engine was built for.
+
+**That last point is the important one.** A subtly wrong decoder still produces
+detections, which is why the 99.2% agreement check against Ultralytics was
+necessary but not sufficient. mAP against real ground truth is the check that
+cannot be fooled — a wrong category mapping, a broken letterbox-undo, or a
+misread output layout would all show up here as a collapsed score.
+
+### The shape of the numbers is right too
+
+| Object size | mAP@50-95 |
+|---|---|
+| small | 0.153 |
+| medium | 0.369 |
+| large | 0.468 |
+
+Small objects are three times harder than large — exactly the expected profile for
+a nano-scale detector at 640×640.
+
+---
+
+## The fan has a thermal governor
+
+Discovered by accident, and it changes how Part 7 has to be designed.
+
+`echo 255 > /sys/devices/pwm-fan/target_pwm` took effect, then the value **reset
+to 0 on its own**. Later, under sustained load, it **rose to 80 without
+intervention** at somewhere around 50 °C.
+
+`systemctl list-units | grep -i fan` returns only `ubuntu-fan.service` — which is
+container networking (Fabric Area Network), not cooling. Unfortunate name
+collision. So the control lives in the kernel `pwm-fan` driver or `nvpmodel`'s
+thermal policy, not a userspace daemon that can simply be stopped.
+
+**Consequences:**
+
+**Earlier "fan off" runs were genuinely fan-off** — they peaked at 42–49.5 °C,
+just under the trigger. So those results stand. But `--fan false` means "the
+governor did not engage", not "the fan was disabled", and the notes should say so.
+
+**Part 7 cannot compare fan-on against fan-off by writing to `target_pwm`** — a
+ten-minute run will heat past the threshold and the governor will engage partway
+through, producing a mixed condition.
+
+**Decision: measure with the governor active.** "Sustained performance under stock
+thermal management" is the more honest claim anyway — it is how the board actually
+behaves in service. The FPS-versus-temperature curve with the fan engaging
+partway is a *better* result than an artificially suppressed one.
+
+Trigger temperature is approximately 50 °C, observed rather than measured
+precisely. Worth pinning down during the Part 7 runs.
+
+---
+
 ## Next
 - [ ] Extra rows: `--workspace=512` on the Nano; a separate laptop-built engine
 - [ ] Record a longer clip (60–90 s) before the Part 7 thermal runs

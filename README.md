@@ -11,14 +11,15 @@ Taking an object detector from a PyTorch checkpoint to an optimised inference
 engine on an **NVIDIA Jetson Nano 2GB** — measuring latency, accuracy, memory and
 thermal behaviour at every step, with error bars.
 
-**TensorRT FP16 runs 1.80× faster than TorchScript FP32 on the same board, with
-detections agreeing to 0.1%.**
+**TensorRT FP16 runs 1.84× faster than TorchScript FP32 on the same board, for a
+0.03% mAP loss** — measured over the full 5,000-image COCO validation set.
 
 ![TensorRT FP16 vs TorchScript FP32 on Jetson Nano](assets/demo_comparison.gif)
 
 *TorchScript FP32 (top) vs TensorRT FP16 (bottom). Same model, same video, same
 board — a Jetson Nano 2GB at 10 W with passive cooling and clocks locked. The FPS
-counters are measured end-to-end throughput; playback is 3× real speed.*
+counters are measured end-to-end throughput; playback is 3× real speed. Both
+configurations score within 0.0001 mAP@50-95 of each other on COCO val2017.*
 
 ---
 
@@ -47,11 +48,24 @@ All Jetson figures at **10 W (`nvpmodel -m 0`) with clocks locked
 
 ### Jetson Nano 2GB
 
-| Runtime | Precision | Inference (ms) | Engine FPS | End-to-end FPS | Cold start | Detections | CV |
+| Runtime | Precision | Inference (ms) | Engine FPS | End-to-end FPS | Cold start | Peak mem | CV |
 |---|---|---|---|---|---|---|---|
-| TorchScript | FP32 | 93.15 ± 0.47 | 10.74 | 8.21 | 24.3 s | 8.33 | 0.50% |
-| **TensorRT** | **FP16** | **51.76 ± 0.13** | **19.32** | **12.51** | **4.1 s** | **8.32** | **0.25%** |
-| | | **1.80× faster** | **1.80×** | **1.52×** | **5.9× faster** | −0.1% | |
+| TorchScript | FP32 | 93.15 ± 0.47 | 10.74 | 8.21 | 24.3 s | ~1150 MB | 0.50% |
+| TensorRT | FP32 | 70.89 ± 0.01 | 14.11 | 10.04 | 4.6 s | 1414 MB | **0.014%** |
+| **TensorRT** | **FP16** | **50.64 ± 0.12** | **19.75** | **12.60** | **4.1 s** | **1086 MB** | 0.23% |
+
+**Where the 1.84× comes from.** Building both TensorRT engines separates the two
+effects, which a single FP16-versus-baseline number cannot:
+
+| Change | Speedup | Mechanism |
+|---|---|---|
+| TorchScript → TensorRT (both FP32) | **1.31×** | kernel fusion, auto-tuned kernel selection, static memory planning |
+| TensorRT FP32 → FP16 | **1.40×** | halved memory traffic on a bandwidth-bound board |
+| Combined | **1.84×** | 1.31 × 1.40 |
+
+**FP16 also saves 328 MB.** On a board with ~1.4 GB usable, FP32 at 1414 MB is
+effectively at the ceiling — so half precision buys headroom as well as speed, and
+the headroom may matter more.
 
 **Latency percentiles.** Tail latency matters more than the mean for a real-time
 system — a mean of 46 ms with a p99 of 200 ms means one frame in a hundred
@@ -109,26 +123,51 @@ whole scene.
 
 ### Accuracy after optimisation
 
-To be measured on a fixed 500-image COCO subset via `pycocotools`, held constant
-across every runtime. Detection counts already agree to 0.1% between FP32 and
-FP16, which is suggestive but is **not** accuracy.
+Full COCO val2017 — **5,000 images, 36,781 annotations** — scored with
+`pycocotools` at the standard evaluation threshold of 0.001.
 
-| Runtime | Precision | mAP@50 | mAP@50-95 | Δ vs FP32 |
-|---|---|---|---|---|
-| TorchScript | FP32 | — | — | baseline |
-| TensorRT | FP32 | — | — | — |
-| TensorRT | FP16 | — | — | — |
+| Runtime | Precision | mAP@50-95 | mAP@50 | mAP@75 | Detections | Δ mAP@50-95 |
+|---|---|---|---|---|---|---|
+| TorchScript | FP32 | 0.3343 | 0.5005 | 0.3529 | 530,418 | baseline |
+| TensorRT | FP32 | **0.3343** | **0.5005** | **0.3529** | 530,417 | **0.0000** |
+| TensorRT | FP16 | 0.3342 | 0.5003 | 0.3529 | 531,012 | **−0.0001** |
+
+**TorchScript and TensorRT FP32 give identical mAP to four decimal places**, and
+differ by **one detection out of 530,418**. Two entirely different inference
+engines producing the same numbers — the conversion is faithful, not merely close.
+
+**FP16 costs 0.0001 mAP@50-95 — 0.03%** — for 1.40× speed and 328 MB less memory.
+mAP@75 is unchanged.
+
+**The pipeline validates against the published figure.** Ultralytics reports
+**0.343** for `yolov5nu`; this measures **0.3343**, 0.9 points lower. The gap is
+explained: Ultralytics evaluates with a rectangular stride-aligned letterbox and
+`max_det=300`, while this project pads to a square 640×640 — what the ONNX export
+declares and the engine was built for.
+
+That agreement is what proves the hand-written decoder, the letterbox-undo maths
+and the COCO category mapping are all correct. A subtly wrong decoder still
+produces detections, so the 99.2% Ultralytics agreement was necessary but not
+sufficient; mAP against real ground truth cannot be fooled.
+
+| Object size | mAP@50-95 (TensorRT FP16) |
+|---|---|
+| small | 0.153 |
+| medium | 0.369 |
+| large | 0.468 |
+
+Small objects are three times harder than large — the expected profile for a
+nano-scale detector at 640×640.
 
 ### Still to measure
 
-- **mAP** on the fixed COCO subset — the table above
-- **TensorRT FP32**, to separate the runtime gain from the precision gain. The
-  current 1.80× mixes both changes.
 - **Sustained ten-minute runs** with the thermal curve. Across three consecutive
   500-frame runs, inference crept 92.6 → 93.4 ms as the board warmed 36 → 49.5 °C
-  — a 1% slowdown over 13.5 °C, and the beginning of an effect that a longer run
-  should make clearer.
+  — a 1% slowdown over 13.5 °C. The board has a thermal governor that engages the
+  fan around 50 °C, so a longer run will show the interaction between throttling
+  and active cooling.
 - **5 W vs 10 W performance-per-watt**
+- **Containerised deployment overhead** — bare metal versus Docker
 
 ---
 
@@ -137,10 +176,10 @@ FP16, which is suggestive but is **not** accuracy.
 Most object detection projects stop at "the model works". This one starts there
 and answers the questions an embedded team asks before shipping:
 
-- **How fast is it end-to-end**, not just the engine? *(1.52× vs 1.80× — see the
+- **How fast is it end-to-end**, not just the engine? *(1.53× vs 1.84× — see the
   breakdown above.)*
-- **How much accuracy did the optimisation cost?** *(Detections agree to 0.1%;
-  mAP measurement pending.)*
+- **How much accuracy did the optimisation cost?** *(0.03% mAP@50-95, measured on
+  the full COCO validation set.)*
 - **How reproducible is the measurement?** *(CV of 0.25% on the Nano across three
   runs.)*
 - **How long does it take to start?** *(4.1 s vs 24.3 s — rarely reported, and it
@@ -482,8 +521,8 @@ See [`results/README.md`](results/README.md) for the full schema.
 
 ## Findings
 
-**The engine/end-to-end gap is large and rarely reported.** 19.32 vs 12.51 FPS on
-the Nano — a 35% drop. Capture, preprocessing and NMS run on the CPU and are
+**The engine/end-to-end gap is large and rarely reported.** 19.75 vs 12.60 FPS on
+the Nano — a 36% drop. Capture, preprocessing and NMS run on the CPU and are
 unchanged by any inference optimisation.
 
 **A prediction that failed.** CPU stages were expected to dominate on four ARM
@@ -492,7 +531,7 @@ Cortex-A57 cores, since they were already 40% of the frame on an i9. They became
 2.1–2.5×. Postprocessing was the exception at 4.1×: NMS is a sort-and-compare loop
 with no vectorisation benefit, which is what ARM does worst.
 
-**PyTorch FP16 gave no speedup; TensorRT FP16 gave 1.80×.** Same precision change,
+**PyTorch FP16 gave no speedup; TensorRT FP16 gave 1.84×.** Same precision change,
 opposite outcomes. `.half()` converts dtypes while keeping the same layer-by-layer
 execution; TensorRT selects different fused kernels and halves actual memory
 traffic. On a bandwidth-bound board that is the whole game.
@@ -504,6 +543,16 @@ mode that is explicit and honoured.
 **Cold start differs by 5.9×** — 24.3 s for TorchScript against 4.1 s for
 TensorRT. TorchScript deserialises and sets up a graph; TensorRT loads a
 pre-compiled engine.
+
+**Two different engines produced identical accuracy.** TorchScript and TensorRT
+FP32 scored 0.3343 / 0.5005 / 0.3529 on every metric and differed by one detection
+out of 530,418. That is the strongest available evidence the conversion is
+faithful — and it is only visible because the FP32 engine was built as a control.
+
+**Rebuilding the engine on an idle board made it 2.2% faster.** The same ONNX,
+the same script, the same workspace — but built headless with more free memory,
+letting the auto-tuner consider kernels it had previously skipped. TensorRT's
+auto-tuning is sensitive to the state of the machine it runs on.
 
 [`NOTES.md`](NOTES.md) records what went wrong as well as what worked, including
 two incorrect diagnoses and a conclusion that was withdrawn and later reinstated
@@ -527,16 +576,21 @@ Stated plainly, because a benchmark without its constraints is not a result.
 - **No tensor cores.** Maxwell supports native FP16 at 2× FP32 throughput, which
   is why FP16 helps at all — but none of the tensor-core acceleration modern
   Jetson benchmarks assume.
-- **mAP not yet measured.** Detection counts agree to 0.1% between FP32 and FP16,
-  which is suggestive but is not accuracy.
+- **Evaluation uses square 640×640 letterboxing**, not Ultralytics' rectangular
+  stride-aligned padding, and applies no explicit `max_det` cap. This accounts for
+  the 0.9-point gap against the published 0.343 figure. Square padding is required
+  here — it is what the ONNX export declares and the engine was built for.
 - **Laptop GPU clocks are capped.** The vendor power profile holds the RTX 3050
   near 1057 MHz of a 2100 MHz ceiling, and utilisation peaks around 42%. Laptop
   figures are therefore a lower bound and a reference point only; the Nano is the
   measurement target. *(The disconnected GPU fan was initially blamed, then
   measured to have no effect — the profile was the cause.)*
-- **Passive cooling on all Nano measurements.** A fan is fitted but was left off
-  so every run shares one thermal condition. Sustained runs with and without the
-  fan are still to come.
+- **Passive cooling on all Nano measurements** — but not by choice. The board has
+  a thermal governor that engages the fan around 50 °C and overrides manual writes
+  to `target_pwm`. Runs peaked at 42–49.5 °C, just under the threshold, so the fan
+  genuinely never engaged. Longer runs will cross it, so sustained measurements
+  will be taken with stock thermal management active rather than artificially
+  suppressed.
 - **JetPack 4.6 pins the stack.** CUDA 10.2, TensorRT 8.2, Python 3.6. FastAPI,
   current `transformers` and much else cannot run on-device.
 - **Ultralytics cannot run on the Nano.** It requires Python 3.8+, while

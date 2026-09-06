@@ -1515,6 +1515,186 @@ precisely. Worth pinning down during the Part 7 runs.
 
 ---
 
+## 2026-09-06 — Part 6: containerisation costs nothing
+
+### Two Part 0 steps had silently not applied
+
+`docker images` returned a permission error. `groups` showed no `docker` group —
+the `usermod -aG docker $USER` from the Part 0 hardening never took.
+
+And `/etc/docker/daemon.json` defined the nvidia runtime but **omitted
+`"default-runtime": "nvidia"`**, so every `docker run` had been using the standard
+runtime with no GPU access.
+
+**Neither failed loudly at the time.** Both surfaced only when something actually
+needed them, weeks later.
+
+*(Group membership applies to new login sessions only — after `usermod`, log out
+and back in.)*
+
+### The base image gives less than expected
+
+```
+docker run --rm --runtime nvidia nvcr.io/nvidia/l4t-base:r32.7.1 \
+    python3 -c "import tensorrt; print(tensorrt.__version__)"
+→ 8.2.1.8
+```
+
+**TensorRT works inside a base image that contains no TensorRT.** The nvidia
+container runtime bind-mounts it from the host. That is why the image stays small
+and why it must be built and run on the Jetson.
+
+Everything else had to be installed:
+
+| Dependency | Source |
+|---|---|
+| TensorRT 8.2.1.8 | **mounted from host** |
+| CUDA runtime | in the base image |
+| OpenCV, NumPy, PyYAML, PyCUDA | ✗ installed in the Dockerfile |
+
+**OpenCV is a real difference worth stating.** `apt install python3-opencv` gives
+the plain Debian build — no CUDA, no GStreamer, unlike JetPack's 4.1.1 on the
+host. Adequate here, since the pipeline uses `imread`, `resize` and
+`VideoCapture` on a file, none of which need the CUDA build. Mounting the host's
+OpenCV would keep it, but would make the container depend on host paths and
+defeat the point.
+
+---
+
+## Three failures, each one an implicit host dependency
+
+This is the part worth keeping. **Every failure was something the host provided
+ambiently that the container did not inherit** — which is exactly what
+containerisation exists to surface.
+
+### 1. `--no-build-isolation` unrecognised
+
+```
+no such option: --no-build-isolation
+```
+
+Ubuntu ships **pip 9.0.1**; the flag arrived in pip 10. The host had been upgraded
+to 20.3.4 back in Part 0, so it worked there.
+
+**Fix:** upgrade pip in the container first, capped below 21.0 which drops Python
+3.6 entirely.
+
+### 2. UnicodeDecodeError reading `params.yaml`
+
+```
+UnicodeDecodeError: 'ascii' codec can't decode byte 0xe2 in position 329
+```
+
+Byte `0xe2` is the first byte of an **em dash** — in a YAML *comment*, on the
+`workspace_mb` line.
+
+**The container has no locale.** Python 3.6 falls back to ASCII for file I/O and
+fails on any non-ASCII character. The host has a UTF-8 locale and never noticed.
+
+**Fix:** `ENV LANG=C.UTF-8` and `LC_ALL=C.UTF-8`. `C.UTF-8` needs no locale data
+installed, unlike `en_US.UTF-8`.
+
+### 3. `ModuleNotFoundError: No module named 'six'`
+
+`pycuda.driver` imports `six` at runtime but **does not declare it as a
+dependency**. The host had it from some other package.
+
+**Fix:** install it explicitly alongside PyCUDA.
+
+### Why this sequence is the point
+
+Three separate implicit dependencies — a pip version, a locale, an undeclared
+import — none of which were visible on the host, all of which would have been
+deployment-time surprises.
+
+**A container that builds and runs is a proof that the dependency list is
+complete.** That is a stronger claim than "it works on my machine", and it is the
+argument for containerising that people usually skip past.
+
+---
+
+## `.dockerignore` — a 15,000× reduction
+
+The first builds reported:
+
+```
+Sending build context to Docker daemon  1.192GB
+```
+
+**Docker copies the entire project directory to the daemon before building** —
+including `data/coco/`, 777 MB of images the container never uses.
+
+After adding `.dockerignore`:
+
+```
+Sending build context to Docker daemon  76.29kB
+```
+
+Nothing about the image changed; every subsequent build just stopped wasting
+minutes shipping data it would discard.
+
+### Layer ordering matters
+
+Adding the `ENV LANG` lines invalidated the cache for **every step below them**,
+forcing apt and PyCUDA to rebuild — 10 minutes.
+
+The Dockerfile is ordered so this rarely bites: `ENV` and dependency installs
+first, `COPY app/` last. Reversing that would mean **every code change rebuilds
+PyCUDA**.
+
+---
+
+## THE RESULT: zero container overhead
+
+Three runs each, same board, same engine, same video, 10 W, clocks locked.
+
+| | Bare metal | Container | Difference |
+|---|---|---|---|
+| Inference | 50.64 ± 0.12 ms | **50.50 ± 0.06 ms** | **−0.27%** |
+| End-to-end FPS | 12.60 | **12.55** | −0.34% |
+| p95 inference | 50.93 ms | 50.81 ms | — |
+| CV | 0.23% | **0.13%** | — |
+| Cold start (warm cache) | 4191 ms | 4351 ms | +4% |
+| Objects per frame | 9 | 9 | identical |
+
+**Both differences sit below the run-to-run CV.** Containerisation costs nothing
+measurable.
+
+### Why this is expected — and why measuring it still matters
+
+Docker is **process isolation using kernel namespaces and cgroups, not
+virtualisation**. There is no hypervisor between the code and the GPU; the nvidia
+runtime bind-mounts the device nodes and libraries directly. Near-zero overhead is
+what theory predicts.
+
+But plenty of people assume containers cost 5–10% on GPU workloads. **"Theory
+predicts" and "I measured it" are different claims**, and this project now has the
+second one.
+
+*(The container's CV is actually lower — 0.13% vs 0.23%. Probably chance with
+three samples, though a container does run in a slightly more isolated process
+environment.)*
+
+### Cold start, and a caveat about it
+
+First container run: **8713.9 ms**. Second: 4472.5. Third: 4229.5.
+
+That is **page-cache warming**, not container overhead — the engine file had not
+been read recently. Same effect seen on the laptop, where cold start varied
+10,295 → 3,811 ms for identical code.
+
+### A note on measurement provenance
+
+`app/run.py` reports to stdout; it does **not** append to `results/speed.csv`.
+Deliberate: it is a service, not the measurement harness, and `benchmarks/` is not
+copied into the image.
+
+Mixing its numbers into `speed.csv` would break the one-instrument rule the whole
+results table rests on. The container rows are reported separately and labelled as
+coming from `app/run.py`.
+
+---
+
 ## Next
 - [ ] Extra rows: `--workspace=512` on the Nano; a separate laptop-built engine
 - [ ] Record a longer clip (60–90 s) before the Part 7 thermal runs

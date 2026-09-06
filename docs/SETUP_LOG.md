@@ -1781,12 +1781,188 @@ fan was disabled".)*
 
 ---
 
+## Part 6 — Containerisation
+
+### 48. Two Part 0 steps that had silently not applied
+
+```bash
+docker images
+# -> Got permission denied while trying to connect to the Docker daemon socket
+
+groups
+# -> no `docker` in the list
+```
+
+The `usermod -aG docker $USER` from Part 0 never took.
+
+```bash
+sudo usermod -aG docker $USER
+exit                                    # group membership applies to NEW sessions
+ssh raviteja@192.168.137.244
+groups                                  # docker now present
+```
+
+And `/etc/docker/daemon.json` defined the nvidia runtime but omitted
+**`"default-runtime": "nvidia"`** — so every `docker run` had been using the
+standard runtime with no GPU access.
+
+```json
+{
+    "default-runtime": "nvidia",
+    "runtimes": {
+        "nvidia": {
+            "path": "nvidia-container-runtime",
+            "runtimeArgs": []
+        }
+    }
+}
+```
+
+```bash
+sudo systemctl restart docker
+```
+
+⚠️ **Neither failed loudly at the time.** Both surfaced only when something
+actually needed them, weeks later.
+
+---
+
+### 49. What the base image actually provides
+
+```bash
+docker pull nvcr.io/nvidia/l4t-base:r32.7.1          # ~700 MB compressed
+
+docker run --rm nvcr.io/nvidia/l4t-base:r32.7.1 \
+    python3 -c "import tensorrt; print(tensorrt.__version__)"
+→ 8.2.1.8
+```
+
+**TensorRT works inside a base image that contains no TensorRT.** The nvidia
+container runtime bind-mounts it from the host. That is why the image stays small
+and why it must be built and run on the Jetson.
+
+Everything else is absent and must be installed:
+
+```bash
+docker run --rm nvcr.io/nvidia/l4t-base:r32.7.1 python3 -c "import cv2"
+# -> ModuleNotFoundError
+docker run --rm nvcr.io/nvidia/l4t-base:r32.7.1 python3 -c "import numpy"
+# -> ModuleNotFoundError
+```
+
+---
+
+### 50. Three build failures, each an implicit host dependency
+
+**Failure 1 — `no such option: --no-build-isolation`**
+
+Ubuntu ships **pip 9.0.1**; the flag arrived in pip 10. The host had been upgraded
+to 20.3.4 in Part 0.
+
+```dockerfile
+RUN pip3 install --no-cache-dir --upgrade "pip<21.0" setuptools wheel
+```
+
+**Failure 2 — `UnicodeDecodeError: 'ascii' codec can't decode byte 0xe2`**
+
+Byte `0xe2` is the first byte of an **em dash**, in a YAML *comment* in
+`params.yaml`. The container has no locale, so Python 3.6 falls back to ASCII for
+file I/O.
+
+```dockerfile
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+```
+
+`C.UTF-8` needs no locale data installed, unlike `en_US.UTF-8`.
+
+**Failure 3 — `ModuleNotFoundError: No module named 'six'`**
+
+`pycuda.driver` imports `six` at runtime but does not declare it as a dependency.
+The host had it from another package.
+
+```dockerfile
+RUN pip3 install --no-cache-dir --no-build-isolation "pycuda==2020.1" six
+```
+
+**All three were things the host provided ambiently.** A container that builds and
+runs is a proof that the dependency list is complete.
+
+**Also:** a transient apt 404 on `bionic-security/universe` failed one build and
+succeeded on retry. The host reached the same repo fine. Mirror flakiness — retry
+before diagnosing.
+
+---
+
+### 51. `.dockerignore`
+
+```
+Sending build context to Docker daemon  1.192GB     # before
+Sending build context to Docker daemon  76.29kB     # after
+```
+
+**Docker copies the whole project directory to the daemon before building**,
+including `data/coco/` — 777 MB the container never uses.
+
+```
+data/
+results/
+venv/
+.git/
+assets/
+docs/
+*.md
+__pycache__/
+*.pyc
+.vscode/
+```
+
+⚠️ **Layer ordering matters.** Adding the `ENV LANG` lines invalidated the cache
+for every step below them, forcing apt and PyCUDA to rebuild — 10 minutes. The
+Dockerfile puts `ENV` and dependency installs first and `COPY app/` last;
+reversing that would mean **every code change rebuilds PyCUDA**.
+
+---
+
+### 52. Build and run
+
+```bash
+docker build -f docker/Dockerfile.jetson -t edgevision:latest .
+
+docker run --rm \
+    -v $(pwd)/models:/app/models \
+    -v $(pwd)/data:/app/data \
+    -v $(pwd)/results:/app/results \
+    edgevision:latest --runtime tensorrt --precision fp16 --frames 500
+```
+
+`--rm` deletes the container on exit; the image stays. `-v host:container` mounts
+a host directory inside — how the engine and video get in without being baked into
+the image.
+
+**Result — three runs each:**
+
+| | Bare metal | Container | Difference |
+|---|---|---|---|
+| Inference | 50.64 ± 0.12 ms | 50.50 ± 0.06 ms | **−0.27%** |
+| End-to-end FPS | 12.60 | 12.55 | −0.34% |
+| Objects per frame | 9 | 9 | identical |
+
+**Both differences sit below the 0.23% run-to-run CV.** Containerisation costs
+nothing measurable — Docker is process isolation via namespaces and cgroups, not
+virtualisation, so nothing sits between the code and the GPU.
+
+*(Cold start read 8713.9 ms on the first container run, then 4472.5 and 4229.5.
+Page-cache warming, not container overhead.)*
+
+---
+
 ## Still to do
 
-- [ ] **Part 6:** Dockerfile on `l4t-base:r32.7.1`, built **on the Nano**;
-      TensorRT-only, no torch; measure bare metal vs container overhead
 - [ ] Make the repo public, add topics and an About description
-- [ ] Re-add the CI badge once `.github/workflows/ci.yml` goes green — NVIDIA torch wheel, torchvision from source,
+- [ ] Re-add the CI badge once `.github/workflows/ci.yml` goes green
+- [ ] **Part 7:** thermal and performance-per-watt study
+- [ ] Parts 8–10: detection sink, monitoring + watchdog, CI — NVIDIA torch wheel, torchvision from source,
       YOLOv5 dependencies pinned for Python 3.6. **Timeboxed to 2 hours**; fall
       back to Option B if torchvision does not compile
 - [ ] Check the preprocessing-share prediction: CPU stages are ~40% of the frame

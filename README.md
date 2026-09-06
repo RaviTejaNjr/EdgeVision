@@ -93,6 +93,27 @@ regarding the clock ceiling.
 | PyTorch (GPU) | FP16 | 15.11 ± 0.42 | 67.51 | 41.47 | 2.8% |
 | TorchScript (GPU) | FP32 | 8.33 ± 0.81 | 120.79 | 57.47 | 9.7% |
 
+### Deployment overhead — container vs bare metal
+
+Three runs each, same board, same engine, same video. Container numbers come from
+`app/run.py` inside the image; bare-metal numbers from `benchmarks/benchmark.py`.
+
+| | Bare metal | Container | Difference |
+|---|---|---|---|
+| Inference | 50.64 ± 0.12 ms | 50.50 ± 0.06 ms | **−0.27%** |
+| End-to-end FPS | 12.60 | 12.55 | −0.34% |
+| p95 inference | 50.93 ms | 50.81 ms | — |
+| Objects per frame | 9 | 9 | identical |
+
+**Containerisation costs nothing measurable** — both differences sit below the
+0.23% run-to-run CV.
+
+Expected, since Docker is process isolation via kernel namespaces and cgroups
+rather than virtualisation: there is no hypervisor between the code and the GPU,
+and the nvidia runtime bind-mounts device nodes and libraries directly. But
+"expected" and "measured" are different claims, and plenty of people assume
+containers cost 5–10% on GPU workloads.
+
 ### Pipeline breakdown
 
 Where the time actually goes. **Three of the four stages run on the CPU.**
@@ -199,6 +220,7 @@ Constraints this tight make the engineering decisions visible.
 - Cold start separated from steady state; engine throughput separated from
   end-to-end
 - Every result carries a git commit SHA and a config hash
+- Containerised on `l4t-base`, with the overhead measured rather than assumed
 
 ---
 
@@ -315,7 +337,7 @@ deployment image copies `app/` alone — which matters on a 2 GB board.
 | **OpenCV 4.1.1 + GStreamer** | Capture and preprocessing (JetPack build, not pip) |
 | **NumPy** | Hand-written box decoding and NMS |
 | **Ultralytics** | Laptop only — export, and as the decoder reference |
-| **Docker** | `l4t-base` runtime container, built on-device |
+| **Docker** | `l4t-base` deployment container, built on-device. TensorRT-only, no torch |
 | **Prometheus / Grafana** | Metrics collection and dashboards |
 | **systemd** | Process supervision and watchdog |
 | **jetson-stats (`jtop`)** | Live thermal, power and utilisation monitoring |
@@ -471,6 +493,32 @@ python3 benchmarks/benchmark.py --runtime tensorrt --precision fp16 \
     --clocks-locked true --fan false --notes "run 1"
 ```
 
+### Containerised
+
+Must be built **on the Jetson** — the image is arm64 and PyCUDA compiles against
+the device's CUDA headers.
+
+```bash
+docker build -f docker/Dockerfile.jetson -t edgevision:latest .
+
+docker run --rm \
+    -v $(pwd)/models:/app/models \
+    -v $(pwd)/data:/app/data \
+    -v $(pwd)/results:/app/results \
+    edgevision:latest --runtime tensorrt --precision fp16 --frames 500
+```
+
+**TensorRT is not installed in the image** — the nvidia container runtime mounts
+it from the host, which is why `import tensorrt` works inside a base image that
+contains none. Requires `"default-runtime": "nvidia"` in
+`/etc/docker/daemon.json`, or an explicit `--runtime nvidia`.
+
+Models and data are **mounted, not baked in**: a TensorRT engine only loads on the
+GPU that built it, and the video is large.
+
+The image excludes torch. TorchScript is the baseline for comparison, not the
+thing being shipped.
+
 ### Demo video
 
 ```bash
@@ -540,6 +588,17 @@ traffic. On a bandwidth-bound board that is the whole game.
 against the laptop's 2.8–7.7%. Clocks locked, nothing else running, and a power
 mode that is explicit and honoured.
 
+**Containerisation costs nothing.** 50.50 ms in the container against 50.64 ms
+bare metal — a 0.27% difference, below the run-to-run CV. Docker is process
+isolation, not virtualisation, so there is no layer between the code and the GPU.
+
+**Three implicit host dependencies only appeared inside the container.** Ubuntu's
+stock pip 9.0.1 predates `--no-build-isolation`; the container has no locale, so
+Python 3.6 fell back to ASCII and choked on an em dash *in a YAML comment*; and
+`pycuda.driver` imports `six` without declaring it. Each worked on the host by
+accident of its environment. **A container that builds and runs is a proof that
+the dependency list is complete.**
+
 **Cold start differs by 5.9×** — 24.3 s for TorchScript against 4.1 s for
 TensorRT. TorchScript deserialises and sets up a graph; TensorRT loads a
 pre-compiled engine.
@@ -600,6 +659,11 @@ Stated plainly, because a benchmark without its constraints is not a result.
 - **TensorRT 8.2 predates native LayerNorm support** (added in 8.6), so
   transformer architectures decompose into elementwise operations and run slower
   than the architecture warrants.
+- **The container's OpenCV is not JetPack's.** `apt install python3-opencv` gives
+  the plain Debian build — no CUDA, no GStreamer — while the host has JetPack's
+  4.1.1 with both. Adequate here, since the pipeline uses `imread`, `resize` and
+  `VideoCapture` on a file. Mounting the host build would keep them but would make
+  the container depend on host paths and defeat the point of containerising.
 - **`peak_mem_mb` is host RSS, not GPU memory.** During a run reporting 5115 MB,
   `nvidia-smi` showed GPU memory flat at 1212 MiB.
 
@@ -609,8 +673,9 @@ Stated plainly, because a benchmark without its constraints is not a result.
 
 Tracked in [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
 
-**Next:** COCO mAP evaluation, TensorRT FP32 to separate runtime gain from
-precision gain, Docker containerisation, thermal and performance-per-watt study.
+**Next:** thermal and performance-per-watt study, ROS2 detection publishing,
+Prometheus/Grafana monitoring with a systemd watchdog, CI with an accuracy
+regression gate.
 
 **Deferred:** cross-hardware model comparison matrix, object tracking, a
 transformer feasibility study on Maxwell, on-device temporal action recognition.

@@ -241,5 +241,14 @@ def build_backend(runtime, cfg, device, precision):
         return TorchScriptBackend(cfg["model"]["torchscript"], device=device,
                                   precision=precision)
     if runtime == "tensorrt":
-        return TensorRTBackend(cfg["model"]["engine"])
+        # Engines are precision-specific. Selecting by key rather than a single
+        # configured path prevents a run labelled fp32 from silently loading the
+        # fp16 engine.        
+        key = "engine_%s" % precision
+        if key not in cfg["model"]:
+            raise ValueError(
+                "no %s in config -- build it with "
+                "models/build_trt_engine.py --precision %s" % (key, precision)
+            )
+        return TensorRTBackend(cfg["model"][key])
     raise ValueError("unknown runtime: %s" % runtime)

@@ -4,7 +4,8 @@ model:
   onnx: models/yolov5nu.onnx
   input_res: 640
   opset: 13
-  engine: models/yolov5nu_fp16.engine
+  engine_fp16: models/yolov5nu_fp16.engine
+  engine_fp32: models/yolov5nu_fp32.engine
   torchscript: models/yolov5nu.torchscript
 
 engine:

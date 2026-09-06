@@ -1196,6 +1196,189 @@ this length.
 
 ---
 
+## 2026-09-06 — Part 5: separating the runtime gain from the precision gain
+
+### The session started with a networking failure — and the cause was physical
+
+Third SSH failure in four cold boots. This time it was diagnosed properly rather
+than worked around.
+
+**Step 1 — the board was fine.** Monitor attached: `raviteja-pc login:` at 9.4 s.
+Clean boot. The `tegra-i2c: no acknowledge from address 0x50` messages are the
+kernel probing for a camera EEPROM that is not plugged in; `edid invalid` was the
+monitor being attached five minutes after boot. Both harmless.
+
+**Step 2 — the interface was up but had no address:**
+
+```
+3: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> ... state UP
+    link/ether 48:b0:2d:2f:64:83
+    inet6 fe80::2686:ced4:2bbb:29f2/64 scope link
+```
+
+**No `inet` line.** Only a self-assigned link-local IPv6 that routes nowhere.
+
+**Step 3 — DHCP was asking, nothing was answering:**
+
+```
+DHCPDISCOVER on eth0 to 255.255.255.255 port 67 interval 3
+DHCPDISCOVER ... interval 6
+DHCPDISCOVER ... interval 8   (eight attempts, no DHCPOFFER)
+```
+
+A working exchange shows `DHCPOFFER` then `DHCPACK`. Only DISCOVER with growing
+backoff means the request is going out and nothing is replying.
+
+**Step 4 — the actual cause.** Windows reported **"Network cable unplugged"** on
+its Ethernet adapter, while the Nano reported `LOWER_UP`. One end saw a link and
+the other did not.
+
+**The fix:** `ncpa.cpl` → right-click Ethernet → **Disable**, wait, **Enable**.
+Windows had the adapter in a stuck state. Re-seating the cable at both ends did
+nothing; the disable/enable cycle fixed it immediately.
+
+**This explains all three earlier failures.** They were never a boot problem or a
+DHCP race — the Windows adapter intermittently drops into a phantom
+"unplugged" state, probably after sleep/wake.
+
+**New first step when SSH fails:** disable/enable the Windows Ethernet adapter,
+before touching the board.
+
+### Rebuilding the engine — a 2.2% improvement
+
+`models/build_trt_engine.py` replaces the day-zero `trtexec` invocation. It also
+prints the platform capability flags, which is a stronger citation for the README
+than documentation:
+
+```
+platform_has_fast_fp16 : True
+platform_has_fast_int8 : False
+```
+
+**That is TensorRT's own API declaring INT8 unavailable on this hardware**, and it
+is reproducible by anyone with the board.
+
+| Engine | Build time | Inference | CV |
+|---|---|---|---|
+| Spike (`trtexec`, during setup) | 654.8 s | 51.76 ± 0.13 ms | 0.25% |
+| **Rebuilt (script, idle board)** | **362.6 s** | **50.64 ± 0.12 ms** | 0.23% |
+
+**2.17% faster, and five times the CV** — so a real difference, not noise. The
+"different models of devices" warning also disappeared.
+
+**Likely cause:** the rebuild ran headless on an idle board with more free memory,
+letting the auto-tuner consider kernels it previously skipped for lack of
+workspace. The near-halved build time is consistent with a less constrained
+environment.
+
+**A finding in its own right:** TensorRT's auto-tuning is sensitive to the state
+of the machine it runs on. An engine built during setup, with a desktop running,
+was measurably worse than the same conversion on an idle board.
+
+---
+
+## PROBLEM 7 — a config key that silently produced a wrong row
+
+Running `--precision fp32` returned **50.74 ms** — identical to FP16.
+
+`app/backends.py` read `cfg["model"]["engine"]`, a single hardcoded path pointing
+at the FP16 file. The `--precision` flag reached the CSV row label but never
+reached engine selection.
+
+**So the run loaded the FP16 engine and recorded it as FP32.** The numbers were
+real; the label was a lie. That is worse than a crash — a crash gets fixed, a
+mislabelled row gets published.
+
+### Fix
+
+Two keys in `configs/params.yaml`:
+
+```yaml
+  engine_fp16: models/yolov5nu_fp16.engine
+  engine_fp32: models/yolov5nu_fp32.engine
+```
+
+And selection by key, with an **explicit failure** rather than a fallback:
+
+```python
+key = "engine_%s" % precision
+if key not in cfg["model"]:
+    raise ValueError("no %s in config -- build it with "
+                     "models/build_trt_engine.py --precision %s" % (key, precision))
+```
+
+The raise is the important part. A missing engine should stop the run, not
+quietly substitute a different one.
+
+The mislabelled row (`231d2542c8bd`) and its `.npz` were deleted.
+
+**Same family as two earlier problems:** `clocks_locked` recording `false` while
+`jetson_clocks` was applied, and `peak_mem_mb` measuring host RSS while looking
+like it might mean GPU memory. **A field that can silently disagree with reality
+is worse than no field**, because it looks like evidence.
+
+---
+
+## THE DECOMPOSITION
+
+Three runs each, same board, same harness, 10 W, clocks locked, fan off.
+
+| Configuration | Inference | E2E FPS | Peak memory | Detections | CV |
+|---|---|---|---|---|---|
+| TorchScript FP32 | 93.15 ± 0.47 ms | 8.21 | ~1150 MB | 8.33 | 0.50% |
+| **TensorRT FP32** | **70.89 ± 0.01 ms** | 10.04 | **1414 MB** | 8.33 | **0.014%** |
+| **TensorRT FP16** | **50.64 ± 0.12 ms** | 12.60 | **1086 MB** | 8.32 | 0.23% |
+
+**The 1.84× splits almost evenly:**
+
+| Change | Speedup | What it is |
+|---|---|---|
+| TorchScript → TensorRT (both FP32) | **1.31×** | the **runtime**: kernel fusion, auto-tuned kernel selection, static memory planning |
+| TensorRT FP32 → FP16 | **1.40×** | the **precision**: halved memory traffic on a bandwidth-bound board |
+| Combined | **1.84×** | 1.31 × 1.40 = 1.84 ✓ |
+
+**This is why the FP32 engine was worth building.** Without it the headline is a
+single number mixing two independent changes. With it, the contribution of each is
+separable and the mechanism behind each is nameable.
+
+### A second finding: FP16 saves 328 MB
+
+| Precision | Engine on disk | Peak process memory |
+|---|---|---|
+| FP32 | 22.9 MB | 1414 MB |
+| FP16 | 11.8 MB | 1086 MB |
+
+**On a board with ~1.4 GB usable, FP32 at 1414 MB is effectively at the ceiling.**
+FP16 buys headroom as well as speed — and on this hardware the headroom may matter
+more, since it is what makes room for the rest of the pipeline.
+
+### The tightest measurement in the project
+
+**TensorRT FP32: 70.88, 70.89, 70.90 ms. CV 0.014%.**
+
+An order of magnitude tighter than anything else measured, including the FP16
+runs. Locked clocks, an idle headless board, and a deterministic engine.
+
+### Accuracy, so far as detection counts show it
+
+**8.33 for both TensorRT precisions**, against TorchScript's 8.33. The 1.40×
+precision speedup cost nothing measurable at this level.
+
+**That is not accuracy.** Detection count is insensitive to boxes shifting or
+scores moving slightly. The COCO mAP evaluation is what turns this into a claim.
+
+### Build times
+
+| Engine | Build time |
+|---|---|
+| FP32 | 151.0 s |
+| FP16 | 362.6 s |
+
+**FP16 takes 2.4× longer to build** — the auto-tuner has both precisions available
+per layer, so the search space is larger.
+
+---
+
 ## Next
 - [ ] Extra rows: `--workspace=512` on the Nano; a separate laptop-built engine
 - [ ] Record a longer clip (60–90 s) before the Part 7 thermal runs

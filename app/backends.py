@@ -72,6 +72,7 @@ class TorchBackend(Backend):
 
         return out.float().cpu().numpy()
 
+
 class TorchScriptBackend(Backend):
     """
     Frozen TorchScript graph. Needs only torch -- no Ultralytics -- which is why
@@ -115,6 +116,7 @@ class TorchScriptBackend(Backend):
             self.torch.cuda.synchronize()
 
         return out.float().cpu().numpy()
+
 
 class OnnxBackend(Backend):
 

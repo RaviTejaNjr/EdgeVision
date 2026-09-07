@@ -1,4 +1,4 @@
-# EdgeVision — Production Edge AI Deployment on NVIDIA Jetson Nano
+# EdgeVision - Production Edge AI Deployment on NVIDIA Jetson Nano
 
 [![TensorRT](https://img.shields.io/badge/TensorRT-8.2-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/tensorrt)
 [![Jetson](https://img.shields.io/badge/Jetson%20Nano-2GB-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/embedded/jetson-nano)

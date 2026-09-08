@@ -96,6 +96,45 @@ def gpu_temp_c():
     return hottest
 
 
+def cpu_temp_c():
+    """Hottest CPU thermal zone. CPU stages are ~35% of the frame, so CPU
+    throttling would show up in the results even when the GPU is fine."""
+    base = "/sys/devices/virtual/thermal"
+    if not os.path.isdir(base):
+        return None
+
+    hottest = None
+    for zone in sorted(os.listdir(base)):
+        if not zone.startswith("thermal_zone"):
+            continue
+        try:
+            with open(os.path.join(base, zone, "type")) as f:
+                kind = f.read().strip().upper()
+            if "CPU" not in kind and "AO" not in kind:
+                continue
+            with open(os.path.join(base, zone, "temp")) as f:
+                c = int(f.read().strip()) / 1000.0
+            if hottest is None or c > hottest:
+                hottest = c
+        except Exception:
+            continue
+    return hottest
+
+
+def fan_pwm():
+    """
+    Fan speed, 0-255. A kernel-level governor manages this and overrides manual
+    writes, engaging somewhere around 50 C. Sampling it is the only way to know
+    when active cooling kicked in during a sustained run -- which is exactly the
+    event a thermal curve needs to be read against.
+    """
+    try:
+        with open("/sys/devices/pwm-fan/target_pwm") as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+
+
 def power_mode():
     try:
         out = subprocess.check_output(
@@ -172,6 +211,11 @@ def run(args, cfg):
     detections_per_frame = []
     max_temp = gpu_temp_c()
 
+    # Thermal trace, sampled every report_every frames rather than every frame:
+    # a /sys read is microseconds, but 500 of them against a 50 ms frame budget
+    # would be measurable. Sparse sampling plus interpolation costs nothing.
+    temp_wall_s, temp_gpu, temp_cpu, temp_fan = [], [], [], []
+
     print("measuring   : %s"
           % ("%d s" % args.duration if args.duration else "%d frames" % args.frames))
 
@@ -218,8 +262,19 @@ def run(args, cfg):
             temp = gpu_temp_c()
             if temp is not None and (max_temp is None or temp > max_temp):
                 max_temp = temp
+
+            temp_wall_s.append(frame_end - loop_start)
+            temp_gpu.append(temp if temp is not None else float("nan"))
+            ct = cpu_temp_c()
+            temp_cpu.append(ct if ct is not None else float("nan"))
+            fp = fan_pwm()
+            temp_fan.append(fp if fp is not None else -1)
+
             print("  %5d frames  |  e2e %.1f ms  |  engine %.1f ms  |  %d det"
-                  % (n, t_total[-1], t_infer[-1], len(boxes)))
+                  "  |  gpu %s C  fan %s"
+                  % (n, t_total[-1], t_infer[-1], len(boxes),
+                     "%.1f" % temp if temp is not None else "n/a",
+                     fp if fp is not None else "n/a"))
 
     elapsed = time.perf_counter() - loop_start
     cap.release()
@@ -302,6 +357,10 @@ def run(args, cfg):
         total_ms=np.asarray(t_total, dtype=np.float32),
         wall_time_s=np.asarray(frame_wall_times, dtype=np.float32),
         detections=np.asarray(detections_per_frame, dtype=np.int32),
+        temp_wall_s=np.asarray(temp_wall_s, dtype=np.float32),
+        gpu_temp_c=np.asarray(temp_gpu, dtype=np.float32),
+        cpu_temp_c=np.asarray(temp_cpu, dtype=np.float32),
+        fan_pwm=np.asarray(temp_fan, dtype=np.int32),
     )
 
     csv_path = os.path.join(args.results_dir, "speed.csv")

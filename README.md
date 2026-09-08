@@ -18,7 +18,7 @@ thermal behaviour at every step, with error bars.
 
 *TorchScript FP32 (top) vs TensorRT FP16 (bottom). Same model, same video, same
 board — a Jetson Nano 2GB at 10 W with passive cooling and clocks locked. The FPS
-counters are measured end-to-end throughput; playback is 3× real speed. Both
+counters are measured end-to-end throughput; playback is 2× real speed. Both
 configurations score within 0.0001 mAP@50-95 of each other on COCO val2017.*
 
 

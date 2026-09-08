@@ -21,6 +21,11 @@ board — a Jetson Nano 2GB at 10 W with passive cooling and clocks locked. The 
 counters are measured end-to-end throughput; playback is 3× real speed. Both
 configurations score within 0.0001 mAP@50-95 of each other on COCO val2017.*
 
+
+<img src="assets/Jetson_Nano.jpg" width="480" alt="The Jetson Nano 2GB used for this project">
+
+*The board every measurement in this README came from - Jetson Nano 2GB Developer Kit, 10 W, passive cooling.*
+
 ---
 
 ## Table of Contents

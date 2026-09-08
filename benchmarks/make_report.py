@@ -49,36 +49,48 @@ def load_row(results_dir, run_id):
 
 
 def rolling(values, window):
-    """Centred rolling mean, with the window clipped at the array bounds."""
+    """
+    Centred rolling mean, returned with its own x-offset.
+
+    np.convolve(mode="same") zero-pads beyond the array bounds, which drags the
+    first and last half-window towards zero and draws a dramatic ramp that never
+    happened. mode="valid" computes only the fully-populated positions, so the
+    caller gets a shorter series and the matching x slice.
+    """
     if len(values) < window:
         window = max(1, len(values) // 4)
     kernel = np.ones(window) / float(window)
-    # 'same' keeps the output length; edges are biased low but only cosmetically.
-    return np.convolve(values, kernel, mode="same")
+    smoothed = np.convolve(values, kernel, mode="valid")
+    offset = (window - 1) // 2
+    return smoothed, offset, window
 
 
-def plot_run(ax_fps, ax_temp, npz, row, label, colour):
+def plot_run(ax_fps, ax_temp, npz, row, label, colours):
+    fps_c, gpu_c, cpu_c = colours
     wall = npz["wall_time_s"]
     total_ms = npz["total_ms"]
 
     inst_fps = 1000.0 / total_ms
-    smoothed = rolling(inst_fps, VIDEO_FRAMES)
+    smoothed, offset, window = rolling(inst_fps, VIDEO_FRAMES)
+    wall_smoothed = wall[offset:offset + len(smoothed)]
 
-    # Raw samples behind the smoothed line: shows the spread without implying
-    # the wobble is signal.
-    ax_fps.plot(wall, inst_fps, color=colour, alpha=0.12, linewidth=0.5)
-    ax_fps.plot(wall, smoothed, color=colour, linewidth=2.0,
-                label="%s -- FPS (%d-frame mean)" % (label, VIDEO_FRAMES))
+    # Raw per-frame samples behind the mean. The spread is real -- scene density
+    # drives NMS cost and detections range 5 to 25 -- so it belongs on the chart,
+    # but faint enough not to read as signal.
+    ax_fps.plot(wall, inst_fps, color=fps_c, alpha=0.18, linewidth=0.4,
+                zorder=1)
+    ax_fps.plot(wall_smoothed, smoothed, color=fps_c, linewidth=2.4, zorder=3,
+                label="%s FPS (%d-frame mean)" % (label, window))
 
     if "temp_wall_s" in npz and len(npz["temp_wall_s"]) > 1:
-        ax_temp.plot(npz["temp_wall_s"], npz["gpu_temp_c"], color=colour,
-                     linestyle="--", linewidth=1.5,
-                     label="%s -- GPU temp" % label)
+        ax_temp.plot(npz["temp_wall_s"], npz["gpu_temp_c"], color=gpu_c,
+                     linestyle="--", linewidth=1.8, zorder=2,
+                     label="GPU temp")
 
         if "cpu_temp_c" in npz and np.isfinite(npz["cpu_temp_c"]).any():
-            ax_temp.plot(npz["temp_wall_s"], npz["cpu_temp_c"], color=colour,
-                         linestyle=":", linewidth=1.2, alpha=0.7,
-                         label="%s -- CPU temp" % label)
+            ax_temp.plot(npz["temp_wall_s"], npz["cpu_temp_c"], color=cpu_c,
+                         linestyle=":", linewidth=1.6, zorder=2,
+                         label="CPU temp")
 
         # Mark where the governor engaged. This is the event the whole curve is
         # read against, so it gets a vertical line rather than a legend entry.
@@ -88,11 +100,12 @@ def plot_run(ax_fps, ax_temp, npz, row, label, colour):
             if len(engaged):
                 t = npz["temp_wall_s"][engaged[0]]
                 temp_at = npz["gpu_temp_c"][engaged[0]]
-                ax_fps.axvline(t, color=colour, linestyle="-.", alpha=0.6)
-                ax_fps.annotate("fan on (%.0f C)" % temp_at,
-                                xy=(t, ax_fps.get_ylim()[0]),
-                                xytext=(t + 5, ax_fps.get_ylim()[0] + 0.3),
-                                fontsize=8, color=colour)
+                ax_fps.axvline(t, color="#444444", linestyle="-.",
+                               alpha=0.8, linewidth=1.4, zorder=4)
+                ax_fps.annotate("fan engages\n%.0f C, PWM %d" % (temp_at, fan[engaged[0]]),
+                                xy=(t, 0.06), xycoords=("data", "axes fraction"),
+                                xytext=(6, 0), textcoords="offset points",
+                                fontsize=9, color="#444444", va="bottom")
 
     return {
         "frames": len(total_ms),
@@ -101,6 +114,7 @@ def plot_run(ax_fps, ax_temp, npz, row, label, colour):
         "fps_last_60s": float(np.mean(inst_fps[wall >= wall[-1] - 60])),
         "temp_start": float(npz["gpu_temp_c"][0]) if "gpu_temp_c" in npz and len(npz["gpu_temp_c"]) else float("nan"),
         "temp_end": float(npz["gpu_temp_c"][-1]) if "gpu_temp_c" in npz and len(npz["gpu_temp_c"]) else float("nan"),
+        "smoothed": smoothed,
     }
 
 
@@ -131,8 +145,10 @@ def main():
     if row_a.get("power_mode"):
         label_a += " @ %s" % row_a["power_mode"]
 
-    stats_a = plot_run(ax_fps, ax_temp, npz_a, row_a, label_a, "#1f77b4")
+    stats_a = plot_run(ax_fps, ax_temp, npz_a, row_a, label_a,
+                       ("#1f77b4", "#d62728", "#ff7f0e"))
     summaries = [(label_a, id_a, stats_a)]
+    smoothed_all = list(stats_a["smoothed"])
 
     if args.compare:
         path_b, id_b = find(args.compare)
@@ -141,17 +157,26 @@ def main():
         label_b = "%s %s" % (row_b.get("runtime", "run"), row_b.get("precision", ""))
         if row_b.get("power_mode"):
             label_b += " @ %s" % row_b["power_mode"]
-        stats_b = plot_run(ax_fps, ax_temp, npz_b, row_b, label_b, "#d62728")
+        stats_b = plot_run(ax_fps, ax_temp, npz_b, row_b, label_b,
+                           ("#2ca02c", "#9467bd", "#8c564b"))
         summaries.append((label_b, id_b, stats_b))
+        smoothed_all += list(stats_b["smoothed"])
 
     ax_fps.set_xlabel("elapsed (s)")
     ax_fps.set_ylabel("end-to-end FPS")
+
+    # Without this the axis spans the raw scatter and the mean looks like a flat
+    # line at the top of an empty chart. Bound it around the smoothed series so
+    # the actual variation is legible.
+    lo, hi = ax_fps.get_ylim()
+    ax_fps.set_ylim(max(lo, np.nanmin(smoothed_all) - 0.6),
+                    min(hi, np.nanmax(smoothed_all) + 0.6))
     ax_temp.set_ylabel("temperature (C)")
     ax_fps.grid(alpha=0.25)
 
     title = "Sustained throughput and thermal behaviour"
     if row_a.get("host_profile"):
-        title += "\\n%s" % row_a["host_profile"]
+        title += "\n" + row_a["host_profile"]
     ax_fps.set_title(title, fontsize=11)
 
     # One legend for both axes, or matplotlib draws two overlapping boxes.

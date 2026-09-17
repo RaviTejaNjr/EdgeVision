@@ -219,6 +219,8 @@ continued. At 5 W the GPU never reached the fan threshold.
   <img src="results/plots/thermal_585939e8ae8b.png" width="49%" alt="5 W thermal run">
 </p>
 
+---
+
 ## What this project is
 
 Most object detection projects stop at "the model works". This one starts there
@@ -433,7 +435,7 @@ held constant across every runtime
 | Board | Jetson Nano 2GB Developer Kit (P3541) |
 | Storage | 128 GB microSD, UHS-I U3 / V30 |
 | Power | **5.1 V / 3 A USB-C** — a phone charger will brown out under load |
-| Cooling | 40 mm 5 V fan (optional; all measurements here are passive) |
+| Cooling | 40 mm 5 V fan; stock thermal governor retained during sustained tests |
 | Camera | Raspberry Pi Camera Module v2 (IMX219) — optional; video file works |
 | Software | JetPack 4.6.x (L4T 32.7.x). The 2GB board cannot run JetPack 5 or 6. |
 
@@ -563,11 +565,11 @@ python benchmarks/compose_demo.py \
 
 ## Benchmarking & Evaluation
 
-**Lock the board state before measuring**, or DVFS varies clocks between runs:
+For the headline runtime benchmarks, lock the board state before measuring:
 
 ```bash
-sudo nvpmodel -m 0     # 10 W  (-m 1 for the 5 W comparison)
-sudo jetson_clocks     # lock clocks
+sudo nvpmodel -m 0
+sudo jetson_clocks
 ```
 
 ### Measurement protocol
@@ -582,7 +584,7 @@ Adopted after several measurements were silently invalidated by power state:
 3. **Three runs minimum per configuration.** Two cannot establish a difference
    below roughly 15%.
 4. **GPU runs before CPU runs**, so CPU load does not heat the machine.
-5. On the Jetson: `nvpmodel` mode and `jetson_clocks` set and recorded.
+5. On the Jetson: `nvpmodel` mode, clock-lock state and fan configuration are explicitly recorded for every run.
 
 ### How results are stored
 

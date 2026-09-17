@@ -190,18 +190,31 @@ sufficient; mAP against real ground truth cannot be fooled.
 Small objects are three times harder than large — the expected profile for a
 nano-scale detector at 640×640.
 
-### Still to measure
+### Sustained thermal and power-mode study
 
-- **Sustained ten-minute runs** with the thermal curve. Across three consecutive
-  500-frame runs, inference crept 92.6 → 93.4 ms as the board warmed 36 → 49.5 °C
-  — a 1% slowdown over 13.5 °C. The board has a thermal governor that engages the
-  fan around 50 °C, so a longer run will show the interaction between throttling
-  and active cooling.
-- **5 W vs 10 W performance-per-watt**
-- **Containerised deployment overhead** — bare metal versus Docker
+TensorRT FP16 was run continuously for 10 minutes under both Jetson power modes.
 
----
+| Metric | 10 W / MAXN | 5 W |
+|---|---:|---:|
+| Frames | 7,512 | 5,118 |
+| FPS first 60 s | 12.61 | 8.65 |
+| FPS last 60 s | **12.49** | **8.46** |
+| First-to-last degradation | **−0.94%** | **−2.11%** |
+| GPU temperature | 33.0 → 45.0 °C | 34.0 → 44.5 °C |
+| Maximum GPU temperature | **50.0 °C** | **44.5 °C** |
+| Sustained FPS / nominal W | **1.249** | **1.692** |
 
+At 5 W the Nano retains **67.7% of the 10 W sustained throughput** while using
+half the configured power envelope. Expressed against the nominal `nvpmodel`
+limits, this is a **35.5% improvement in throughput per configured watt**.
+
+This is not a direct electrical power measurement: 5 W and 10 W are the configured
+`nvpmodel` power envelopes, not measured board power. The result is therefore
+reported as **nominal FPS/W**, not true energy efficiency.
+
+During the 10 W run the GPU reached **50 °C**, at which point the stock thermal
+governor engaged the fan at PWM 80. Temperature then fell to 45 °C while inference
+continued. At 5 W the GPU never reached the fan threshold.
 ## What this project is
 
 Most object detection projects stop at "the model works". This one starts there

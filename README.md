@@ -24,7 +24,7 @@ configurations score within 0.0001 mAP@50-95 of each other on COCO val2017.*
 
 <img src="assets/Jetson_Nano.jpg" width="480" alt="The Jetson Nano 2GB used for this project">
 
-*The board every measurement in this README came from - Jetson Nano 2GB Developer Kit, 10 W, passive cooling.*
+*The Jetson Nano 2GB Developer Kit used for every on-device measurement in this project.*
 
 ---
 
@@ -419,8 +419,8 @@ memory, temperature and power mode.
 
 ### 6. Evaluate — `evaluation/coco_eval.py`
 
-mAP@50, mAP@50-95, precision and recall on a fixed COCO subset held constant
-across every runtime, joined to speed results by config hash.
+mAP@50, mAP@50-95, precision and recall on the full 5,000-image COCO val2017 set,
+held constant across every runtime
 
 ---
 
@@ -718,13 +718,17 @@ Stated plainly, because a benchmark without its constraints is not a result.
 
 Tracked in [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
 
-**Next:** thermal and performance-per-watt study, ROS2 detection publishing,
-Prometheus/Grafana monitoring with a systemd watchdog, CI with an accuracy
-regression gate.
+**Completed:** runtime benchmarking, TensorRT FP32/FP16 optimisation, full COCO
+accuracy evaluation, Docker deployment and overhead measurement, sustained thermal
+testing, and 5 W vs 10 W power-mode benchmarking.
+
+**Next:** lightweight inference service, Prometheus/Grafana monitoring with a
+systemd watchdog, CI with an accuracy regression gate, and v1.0 release cleanup.
+
+**Optional after v1:** ROS2 detection publishing.
 
 **Deferred:** cross-hardware model comparison matrix, object tracking, a
 transformer feasibility study on Maxwell, on-device temporal action recognition.
-
 ---
 
 ## License

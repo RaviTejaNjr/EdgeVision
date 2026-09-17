@@ -47,9 +47,7 @@ configurations score within 0.0001 mAP@50-95 of each other on COCO val2017.*
 
 ## Results
 
-All Jetson figures at **10 W (`nvpmodel -m 0`) with clocks locked
-(`jetson_clocks`), passive cooling, fan off**, batch size 1, 640×640 input,
-500 frames per run, three runs per configuration.
+Unless otherwise stated, the headline runtime benchmarks below were measured at **10 W (`nvpmodel -m 0`) with clocks locked (`jetson_clocks`) and fan off**, batch size 1, 640×640 input, 500 frames per run, three runs per configuration. The sustained thermal and power-mode study uses its separately documented 10-minute configurations.
 
 ### Jetson Nano 2GB
 
@@ -215,6 +213,12 @@ reported as **nominal FPS/W**, not true energy efficiency.
 During the 10 W run the GPU reached **50 °C**, at which point the stock thermal
 governor engaged the fan at PWM 80. Temperature then fell to 45 °C while inference
 continued. At 5 W the GPU never reached the fan threshold.
+
+<p align="center">
+  <img src="results/plots/thermal_6348178c575d.png" width="49%" alt="10 W thermal run">
+  <img src="results/plots/thermal_585939e8ae8b.png" width="49%" alt="5 W thermal run">
+</p>
+
 ## What this project is
 
 Most object detection projects stop at "the model works". This one starts there
@@ -310,7 +314,7 @@ edgevision/
 │
 ├── evaluation/
 │   ├── validate_decoder.py           # NumPy decoder vs Ultralytics reference
-│   └── coco_eval.py                  # mAP on the fixed COCO subset
+│   └── coco_eval.py                  # mAP on the full COCO val2017 set
 │
 ├── tests/
 │   ├── test_parity.py                # PyTorch vs ONNX numerical agreement
@@ -618,6 +622,17 @@ likely with NEON optimisations. Docker is process isolation rather than
 virtualisation, so nothing sits between the code and the GPU; the cost is in a
 userspace library, not the runtime.
 
+**Ten minutes at 10 W produced less than 1% sustained throughput degradation.**
+TensorRT FP16 fell from 12.61 FPS over the first 60 seconds to 12.49 FPS over the
+last 60 seconds, a 0.94% change. The GPU reached 50 °C, triggered the stock fan
+governor, and then cooled to 45 °C without interrupting inference.
+
+**The 5 W mode trades throughput for substantially better nominal efficiency.**
+It sustained 8.46 FPS, retaining 67.7% of the 10 W throughput while using half
+the configured power envelope. That corresponds to 1.692 versus 1.249 sustained
+FPS per nominal watt, a 35.5% increase. These are power-envelope-normalised
+figures, not measurements of electrical board power.
+
 **An earlier version of this comparison had the wrong sign.** Container numbers
 came from `app/run.py` and bare-metal numbers from `benchmarks/benchmark.py` — two
 instruments. Re-measuring both with the same harness reversed the result. The
@@ -675,12 +690,11 @@ Stated plainly, because a benchmark without its constraints is not a result.
   figures are therefore a lower bound and a reference point only; the Nano is the
   measurement target. *(The disconnected GPU fan was initially blamed, then
   measured to have no effect — the profile was the cause.)*
-- **Passive cooling on all Nano measurements** — but not by choice. The board has
-  a thermal governor that engages the fan around 50 °C and overrides manual writes
-  to `target_pwm`. Runs peaked at 42–49.5 °C, just under the threshold, so the fan
-  genuinely never engaged. Longer runs will cross it, so sustained measurements
-  will be taken with stock thermal management active rather than artificially
-  suppressed.
+- **Stock thermal management was retained for sustained runs.** Short benchmark
+  runs remained below the fan threshold, but the 10-minute 10 W run reached
+  **50 °C**, where the Jetson thermal governor automatically raised the fan to
+  PWM 80. The GPU subsequently cooled to 45 °C while inference continued.
+  The equivalent 5 W run peaked at 44.5 °C and never triggered the fan.
 - **JetPack 4.6 pins the stack.** CUDA 10.2, TensorRT 8.2, Python 3.6. FastAPI,
   current `transformers` and much else cannot run on-device.
 - **Ultralytics cannot run on the Nano.** It requires Python 3.8+, while

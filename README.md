@@ -371,7 +371,7 @@ deployment image copies `app/` alone — which matters on a 2 GB board.
 | **systemd** | Process supervision and watchdog |
 | **jetson-stats (`jtop`)** | Live thermal, power and utilisation monitoring |
 | **ffmpeg** | Test video normalisation, demo composition |
-| **ROS2** | Detection publishing — *optional extension, not required for v1* |
+| **ROS2** | Detection publishing — *optional extension, not in v1* |
 
 ---
 

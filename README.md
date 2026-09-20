@@ -175,6 +175,7 @@ The project covers:
 - Bare-metal vs Docker comparison
 - Sustained thermal and 5 W / 10 W operating-point measurements
 - Machine-readable JSONL detection output for downstream consumers
+- GitHub Actions CI with Python syntax checks and an accuracy regression gate
 - Reproducible result records using git commit SHA and configuration hashes
 
 The target is intentionally constrained: Jetson Nano 2GB, JetPack 4.6, CUDA 10.2, TensorRT 8.2 and Python 3.6.
@@ -246,7 +247,7 @@ edgevision/
 │
 ├── tests/
 │   ├── test_parity.py
-│   └── test_regression.py
+│   └── test_accuracy_regression.py
 │
 ├── monitoring/
 ├── systemd/
@@ -283,6 +284,7 @@ edgevision/
 | **NumPy** | Box decoding and NMS |
 | **Ultralytics** | Laptop-side export and decoder reference |
 | **Docker** | `l4t-base` deployment container |
+| **GitHub Actions** | CI syntax checks and accuracy regression gate |
 | **systemd** | Process supervision, boot auto-start and automatic restart |
 | **jetson-stats (`jtop`)** | Thermal, power and utilization monitoring |
 | **ffmpeg** | Test video normalization and demo composition |
@@ -519,6 +521,14 @@ sudo jetson_clocks
 5. On the Jetson, record `nvpmodel`, clock-lock state and fan configuration for every run.
 6. Keep long-duration thermal runs separate from the repeated short benchmark protocol.
 
+### CI accuracy regression gate
+
+`.github/workflows/ci.yml` runs on pushes and pull requests to `main`. It checks Python syntax and runs `tests/test_accuracy_regression.py`.
+
+The regression test reads the committed COCO results in `results/accuracy.csv` and compares TensorRT FP16 against the TorchScript FP32 reference. The allowed absolute mAP@50-95 drop is configured in `configs/params.yaml` as `0.01`. The current measured drop is `0.00032`, so the gate passes with substantial margin.
+
+The workflow was verified on GitHub Actions for commit `fea6f22`.
+
 ### Result storage
 
 Benchmark rows are append-only and include a configuration hash and git commit SHA. A `-dirty` suffix is added when the benchmark is run from a working tree with uncommitted changes.
@@ -541,6 +551,7 @@ See [`results/README.md`](results/README.md) for the result schema and run-level
 - **TensorRT engine build conditions mattered.** Rebuilding the same model on a less-loaded board produced a measurable performance difference, so engine-build conditions are recorded with the results.
 - **The inference path exposes consumable output.** `app/run.py --sink` writes one JSONL record per frame; a separate consumer successfully parsed a 20-frame TensorRT FP16 run.
 - **Process supervision was verified on-device.** The systemd unit restarted EdgeVision after a forced `SIGKILL`, and the enabled service started automatically after a Nano reboot. Runtime output is captured by journald.
+- **The accuracy regression gate is enforced in CI.** GitHub Actions checks Python syntax and verifies that TensorRT FP16 stays within the configured 0.01 absolute mAP@50-95 drop from the TorchScript FP32 reference.
 
 ---
 
@@ -570,9 +581,9 @@ See [`results/README.md`](results/README.md) for the result schema and run-level
 - 5 W / 10 W operating-point study
 - JSONL detection sink verified with an independent consumer
 - systemd process supervision, crash recovery and boot auto-start verified on the Nano
+- GitHub Actions CI with Python syntax checks and accuracy regression gate
 
 **Next**
-- CI accuracy regression gate
 - v1.0 cleanup and release
 
 **Optional after v1**

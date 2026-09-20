@@ -1,0 +1,15 @@
+[Unit]
+Description=EdgeVision TensorRT FP16 Inference Service
+After=network.target
+
+[Service]
+Type=simple
+User=raviteja
+WorkingDirectory=/home/raviteja/EdgeVision
+ExecStart=/usr/bin/python3 -u app/run.py --runtime tensorrt --precision fp16
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -3,9 +3,9 @@
 # MUST be built on the Jetson. This is an arm64 image, and PyCUDA compiles
 # against the CUDA headers present on the device.
 #
-# TensorRT itself is NOT installed here. The nvidia container runtime mounts it
-# from the host, which is why `import tensorrt` works inside a base image that
-# contains no TensorRT. Verified: 8.2.1.8.
+# TensorRT is not installed separately by this Dockerfile. On Jetson, the
+# NVIDIA container runtime exposes the compatible host JetPack/TensorRT stack
+# needed by the container. Verified on this Nano: TensorRT 8.2.1.8.
 #
 # Deliberately excludes torch. A container with torch would be several GB and
 # slow to build on a 2 GB board, and the deployment path does not need it --
@@ -35,9 +35,9 @@ ENV PATH=/usr/local/cuda/bin:${PATH}
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
 
 # python3-dev provides Python.h for PyCUDA's C extension.
-# python3-opencv is the plain Debian build -- no CUDA, no GStreamer, unlike the
-# host's JetPack OpenCV 4.1.1. Adequate here: the pipeline uses cv2.imread,
-# cv2.resize and VideoCapture on a file, none of which need the CUDA build.
+# python3-opencv is the distribution OpenCV build, not the JetPack host build.
+# That difference matters for performance, but this pipeline only needs the CPU
+# resize / video I/O path used by the current deployment.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         python3-dev \
@@ -65,18 +65,20 @@ WORKDIR /app
 COPY app/ /app/app/
 COPY configs/ /app/configs/
 
-# Mounted at run time rather than baked in: models are hardware-specific (a
-# TensorRT engine only loads on the GPU that built it) and the video is large.
+# Mounted at run time rather than baked in: TensorRT engines are treated as
+# target-specific deployment artifacts, while videos/results are external data.
 VOLUME ["/app/models", "/app/data", "/app/results"]
 
 # Unbuffered, so container logs appear immediately rather than on flush.
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-# Fails fast if the runtime mount is missing -- the failure mode this replaces is
-# a container that starts, runs on CPU, and silently reports wrong numbers.
+# Lightweight environment check only. This verifies that TensorRT imports and
+# that CUDA exposes at least one device; it does not prove the engine loads or
+# that the application is healthy. Part 8/9 can replace this with an app-level
+# health endpoint once the inference service exists.
 HEALTHCHECK --interval=30s --timeout=10s --retries=2 \
-    CMD python3 -c "import tensorrt, pycuda.driver" || exit 1
+    CMD python3 -c "import tensorrt, pycuda.driver as cuda; cuda.init(); assert cuda.Device.count() > 0" || exit 1
 
 ENTRYPOINT ["python3", "/app/app/run.py"]
 CMD ["--runtime", "tensorrt", "--precision", "fp16"]

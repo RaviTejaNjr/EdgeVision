@@ -35,7 +35,7 @@ EdgeVision takes an object detector from a PyTorch checkpoint to an optimized Te
 
 ## Results
 
-Unless otherwise stated, the repeated runtime benchmarks below were measured at **10 W (`nvpmodel -m 0`) with clocks locked (`jetson_clocks`) and fan off**, batch size 1, 640×640 input, 500 frames per run and three runs per configuration. The 10-minute sustained runs use their own recorded operating-point settings.
+Unless otherwise stated, the repeated runtime benchmarks below were measured at **10 W (`nvpmodel -m 0`) with clocks locked (`jetson_clocks`)**, batch size 1, 640×640 input, 500 frames per run and three runs per configuration. The fan started at PWM 0 and stock thermal management remained active. The 10-minute sustained runs use their own recorded operating-point settings.
 
 ### Jetson Nano 2GB
 
@@ -51,7 +51,7 @@ The speedup can be separated into the runtime change and the precision change:
 |---|---|---|
 | TorchScript → TensorRT (FP32) | **1.31×** | TensorRT kernel selection, fusion and static memory planning |
 | TensorRT FP32 → FP16 | **1.40×** | Lower precision and lower memory traffic |
-| Combined | **1.84×** | 1.31 × 1.40 |
+| Overall: TorchScript FP32 → TensorRT FP16 | **1.84×** | 93.15 / 50.64 |
 
 FP16 also reduced the measured peak process memory by **328 MB** compared with TensorRT FP32.
 
@@ -174,6 +174,7 @@ The project covers:
 - Full COCO val2017 accuracy evaluation
 - Bare-metal vs Docker comparison
 - Sustained thermal and 5 W / 10 W operating-point measurements
+- Machine-readable JSONL detection output for downstream consumers
 - Reproducible result records using git commit SHA and configuration hashes
 
 The target is intentionally constrained: Jetson Nano 2GB, JetPack 4.6, CUDA 10.2, TensorRT 8.2 and Python 3.6.
@@ -197,14 +198,13 @@ video file / IMX219 camera
         ▼
   postprocess  (decode 1×84×8400, per-class NMS - hand-written NumPy)
         │
-        ├──────────────►  detection sink (JSONL; ROS2 optional)
+        ▼
+  detection sink  (JSONL, one record per frame)
         │
-        └──────────────►  metrics exporter
-                                │
-                                ▼
-                          Prometheus → Grafana
+        ▼
+  downstream consumer
 
-  systemd watchdog wraps the process (Restart=always)
+  systemd supervision is the next v1 deployment step
 ```
 
 | Laptop (Python 3.10) | Jetson Nano (Python 3.6) |
@@ -222,6 +222,7 @@ video file / IMX219 camera
 edgevision/
 │
 ├── app/
+│   ├── run.py
 │   ├── preprocess.py
 │   ├── postprocess.py
 │   └── backends.py
@@ -282,8 +283,7 @@ edgevision/
 | **NumPy** | Box decoding and NMS |
 | **Ultralytics** | Laptop-side export and decoder reference |
 | **Docker** | `l4t-base` deployment container |
-| **Prometheus / Grafana** | Planned metrics and dashboards |
-| **systemd** | Planned process supervision and watchdog |
+| **systemd** | Next v1 step: process supervision and automatic restart |
 | **jetson-stats (`jtop`)** | Thermal, power and utilization monitoring |
 | **ffmpeg** | Test video normalization and demo composition |
 | **ROS2** | Optional detection-publishing extension after v1 |
@@ -321,6 +321,12 @@ The same benchmark harness is reused across runtimes. It records cold start sepa
 ### 6. Evaluate - `evaluation/coco_eval.py`
 
 The evaluation script measures COCO mAP on the full 5,000-image val2017 set using the same project preprocessing and postprocessing path for each runtime.
+
+### 7. Detection output - `app/run.py`
+
+The inference runner can write one JSON object per processed frame with `--sink`. Each JSONL record contains the frame number, timestamp and decoded detections (`box`, `score`, `class`).
+
+The interface was verified on the Nano with a 20-frame TensorRT FP16 run: 20 processed frames produced 20 JSONL records, and a separate Python process parsed the file successfully.
 
 ---
 
@@ -425,6 +431,26 @@ python3 benchmarks/benchmark.py \
     --notes "run 1"
 ```
 
+### JSONL detection output
+
+The inference runner can expose detections to another process without adding a web framework:
+
+```bash
+python3 app/run.py \
+    --runtime tensorrt \
+    --precision fp16 \
+    --frames 20 \
+    --sink /tmp/edgevision_detections.jsonl
+```
+
+Each line is an independent JSON object:
+
+```json
+{"frame": 1, "timestamp": 1789903653.2286446, "detections": [{"box": [59.0, 223.0, 259.5, 716.0], "score": 0.9199, "class": "person"}]}
+```
+
+A separate Python process was used to parse the generated file, confirming that detections leave the inference process in a machine-readable format.
+
 ### Containerized run
 
 The Jetson image is built on-device because it targets arm64 and PyCUDA compiles against the Jetson CUDA environment.
@@ -494,6 +520,7 @@ See [`results/README.md`](results/README.md) for the result schema and run-level
 - **Cold start was much shorter with TensorRT.** The measured startup time was 4.1 s versus 24.3 s for TorchScript.
 - **Benchmark methodology mattered.** An early Docker comparison used different measurement paths for host and container. Re-running both through the same harness changed the conclusion, so later comparisons use one benchmark path.
 - **TensorRT engine build conditions mattered.** Rebuilding the same model on a less-loaded board produced a measurable performance difference, so engine-build conditions are recorded with the results.
+- **The inference path exposes consumable output.** `app/run.py --sink` writes one JSONL record per frame; a separate consumer successfully parsed a 20-frame TensorRT FP16 run.
 
 ---
 
@@ -521,16 +548,16 @@ See [`results/README.md`](results/README.md) for the result schema and run-level
 - Docker deployment and bare-metal comparison
 - sustained thermal testing
 - 5 W / 10 W operating-point study
+- JSONL detection sink verified with an independent consumer
 
 **Next**
-- lightweight inference service / detection sink
-- Prometheus/Grafana monitoring
-- systemd watchdog and recovery
+- systemd process supervision and crash recovery
 - CI accuracy regression gate
 - v1.0 cleanup and release
 
 **Optional after v1**
 - ROS2 detection publishing
+- Prometheus/Grafana monitoring
 
 **Deferred**
 - cross-hardware model comparison

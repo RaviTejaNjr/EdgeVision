@@ -1,185 +1,226 @@
 # Results
 
-Measurements are a deliverable of this project, so this directory is committed
-rather than gitignored.
+This directory contains the benchmark, accuracy and thermal results used in the main project README. Raw timing data is kept where it is small enough to be useful for reproducing plots and checking individual runs.
 
 ## Files
 
-| File | Rows | Schema | Contents |
-|---|---|---|---|
-| `speed.csv` | growing | 37 columns | The clean record. Every run carries a `host_profile` describing the machine's power state. |
-| `speed_exploratory.csv` | 23 | 36 columns | Earlier laptop runs, kept for the findings they produced. **No `host_profile` column.** |
-| `raw/*.npz` | one per run | — | Per-frame timing arrays, keyed by `run_id` |
-| `accuracy.csv` | one per config | 20 columns | mAP from `pycocotools` on the full COCO val2017 set |
-| `detections_*.json` | — | — | **Gitignored.** 49 MB each, regenerable from `evaluation/run_coco_detections.py` |
+| File | Purpose |
+|---|---|
+| `speed.csv` | Main benchmark results. Includes `host_profile` and run metadata. |
+| `speed_exploratory.csv` | Earlier laptop runs collected before `host_profile` was added. |
+| `accuracy.csv` | COCO mAP results for each model/runtime configuration. |
+| `raw/*.npz` | Per-frame timing arrays, keyed by `run_id`. |
+| `plots/thermal_*.png` | Thermal plots generated from sustained runs. |
+| `detections_*.json` | COCO detections generated during evaluation. Gitignored because each file is about 49 MB and can be regenerated. |
 
-## Why there are two speed files
+## Speed results
 
-`host_profile` was added after the exploratory runs, in response to a problem they
-exposed: **two runs of identical code on identical hardware differed by 5×**, and
-nothing in the CSV explained why.
+Use `speed.csv` for comparisons.
 
-The cause was the laptop's Windows power profile. It had been in a vendor "Whisper"
-mode, holding the GPU at 210 MHz against a 2100 MHz ceiling. Later, a run on
-battery was 2.6× slower than the same run on mains. Neither state was visible to
-the harness — `nvpmodel -q` reports it on the Jetson, but Windows exposes nothing
-equivalent — so it is now supplied explicitly on the command line and folded into
-the config hash.
+`speed_exploratory.csv` is kept because it records an issue found early in the project: identical code on the same laptop produced very different timings when the Windows power state changed. Those runs are useful as a record, but they are not clean baselines.
 
-Rows in `speed_exploratory.csv` were taken at three different power profiles and
-can only be told apart by reading the `notes` field. They are kept because they
-are the evidence behind that finding, not because they are usable baselines.
+### Run metadata
 
-**Use `speed.csv` for anything comparative.**
-
-## Reading `speed.csv`
-
-### Provenance
+The main fields used to identify a result are:
 
 | Column | Meaning |
 |---|---|
-| `run_id` | Unique per execution. Matches the filename in `raw/`. |
-| `config_hash` | Stable SHA-1 of the configuration. Join key to `accuracy.csv`. |
-| `git_commit` | Short SHA, suffixed **`-dirty`** when the working tree had uncommitted changes — so a row cannot claim to come from code that is not what actually ran. |
-| `host_profile` | Power state: profile, mains vs battery, fan. See above. |
+| `run_id` | Unique ID for one benchmark execution. Also used for the matching file in `raw/`. |
+| `config_hash` | Stable hash of the model/runtime configuration. Used to join speed and accuracy results. |
+| `git_commit` | Git SHA for the code that produced the run. `-dirty` means there were uncommitted changes. |
+| `host_profile` | Recorded host power/profile state for that run. |
+| `notes` | Free-form run notes. |
 
-Several rows may share a `config_hash` while differing substantially in speed.
-That is expected and correct: the hash identifies the *model configuration*, and
-accuracy does not depend on clock speed, so one accuracy row per hash is right.
-Speed rows are distinguished by `host_profile` and `notes`.
+Several speed rows can share the same `config_hash`. That is expected. The hash identifies the model configuration, while `host_profile` and `notes` record the machine state used for a particular benchmark.
 
-### Timing
+### Timing fields
 
-Two throughput figures are reported, and they are not interchangeable:
+Two FPS values are kept:
 
-- **`fps_engine`** — inference alone
-- **`fps_end_to_end`** — capture + preprocess + inference + postprocess + NMS
+- `fps_engine`: inference only
+- `fps_end_to_end`: capture + preprocess + inference + postprocess/NMS
 
-On the laptop these are 73.6 and 42.7 FPS: a **42% drop**. Capture,
-preprocessing and NMS all run on the CPU. Most published edge benchmarks report
-only the first figure.
+`cold_start_ms` is measured once and is not included in steady-state FPS.
 
-`cold_start_ms` covers model loading, engine deserialisation and buffer
-allocation — measured once, excluded from steady state. It is roughly 250× the
-cost of a frame, and it varies with filesystem caching: the same run measured
-10,295 ms cold and 3,811 ms warm.
+`fps_sustained_last_60s` is only populated for long runs. It is the throughput over the final 60 seconds and is used for the thermal tests.
 
-`fps_sustained_last_60s` is throughput over the final 60 seconds only, and is
-blank for runs shorter than that. It exists to catch degradation that a mean
-hides — on the battery run it read 4.88 against a mean of 6.23.
+p50 and p95 are kept alongside the mean so that latency spread is visible instead of being hidden by one average value.
 
-p50 and p95 are reported alongside means because tail latency is what matters for
-a real-time system. A mean of 46 ms with a p99 of 200 ms means one frame in a
-hundred arrives catastrophically late.
+### Memory field
 
-### Two columns that are easy to misread
+`peak_mem_mb` is process RSS, not GPU memory.
 
-**`peak_mem_mb` is host memory, not GPU memory.** It is the Python process's
-resident set size — interpreter, torch, CUDA libraries and all. During a run where
-this column read 5115 MB, `nvidia-smi` showed GPU memory flat at 1212 MiB.
+For example, one laptop run reported 5115 MB RSS while `nvidia-smi` showed about 1212 MiB of GPU memory in use. Do not read `peak_mem_mb` as VRAM usage.
 
-**`throttled` is filled in by hand** after inspecting a run. It is not detected
-automatically.
+`throttled` is currently filled in manually after inspecting the run.
 
-## Reading `accuracy.csv`
+## Jetson runtime comparison
 
-One row per **configuration**, not per run — accuracy is deterministic, so there
-is nothing to average. It joins to `speed.csv` on `config_hash`.
+Headline Jetson benchmarks were run at 10 W (`nvpmodel -m 0`) with clocks locked using `jetson_clocks`, fan off, batch size 1 and 640x640 input. Each configuration was repeated three times.
 
-**The hash deliberately excludes power state.** mAP does not depend on clock
-speed, so one accuracy row correctly maps to several speed rows taken at different
-power profiles.
+| Runtime | Precision | Inference | End-to-end FPS | Peak RSS |
+|---|---|---:|---:|---:|
+| TorchScript | FP32 | 93.15 ms | 8.21 | - |
+| TensorRT | FP32 | 70.89 ms | 10.04 | 1414 MB |
+| TensorRT | FP16 | 50.64 ms | 12.60 | 1086 MB |
 
-### Evaluation protocol
+From these runs:
 
-| Setting | Value | Why |
-|---|---|---|
-| Dataset | full COCO val2017 — 5,000 images, 36,781 annotations | a 500-image subset could not resolve differences below ~1 mAP point, and the expected FP16 difference was far smaller |
-| Confidence threshold | **0.001** | mAP integrates the precision–recall curve; high-recall points come only from low-confidence detections. The runtime uses 0.25 — a different job |
-| NMS IoU | 0.45 | as configured for the runtime |
-| Letterbox | square 640×640 | what the ONNX export declares and the engine was built for |
-| Max detections | uncapped (COCO convention is 300) | averaged 106.2 per image, so the cap was never reached |
+- TorchScript FP32 -> TensorRT FP32: 1.31x inference speedup
+- TensorRT FP32 -> TensorRT FP16: 1.40x
+- TorchScript FP32 -> TensorRT FP16: 1.84x inference speedup
+- End-to-end throughput improved from 8.21 FPS to 12.60 FPS
+- TensorRT FP16 used 328 MB less peak RSS than TensorRT FP32
 
-0.001 with `max_det=300` is the standard used by Ultralytics, MMDetection,
-Detectron2 and the original YOLO papers. Evaluating at 0.25 would give numbers
-that are internally consistent but not comparable with any published figure.
 
-### Current results
+## Accuracy
+
+`accuracy.csv` stores one row per model/runtime configuration. Results are joined to `speed.csv` through `config_hash`.
+
+### COCO evaluation setup
+
+| Setting | Value |
+|---|---|
+| Dataset | COCO val2017, full 5,000 images / 36,781 annotations |
+| Confidence threshold | 0.001 |
+| NMS IoU | 0.45 |
+| Input | square 640x640 letterbox |
+| Scoring | `pycocotools` |
+
+The low confidence threshold is used for evaluation so that low-confidence predictions are still available when the precision-recall curve is built. The runtime demo uses a higher threshold because it serves a different purpose.
+
+The detection export does not apply an extra project-specific per-image cap before COCO scoring. The evaluator handles its own `maxDets` settings.
+
+### COCO results
 
 | Runtime | Precision | mAP@50-95 | mAP@50 | mAP@75 | Detections |
-|---|---|---|---|---|---|
+|---|---|---:|---:|---:|---:|
 | TorchScript | FP32 | 0.3343 | 0.5005 | 0.3529 | 530,418 |
 | TensorRT | FP32 | 0.3343 | 0.5005 | 0.3529 | 530,417 |
 | TensorRT | FP16 | 0.3342 | 0.5003 | 0.3529 | 531,012 |
 
-TorchScript and TensorRT FP32 are **identical to four decimal places** and differ
-by one detection out of 530,418. FP16 costs **0.0001 mAP@50-95**.
+TorchScript FP32 and TensorRT FP32 match to four decimal places. TensorRT FP16 is 0.0001 lower on mAP@50-95 in this evaluation.
 
-Ultralytics publishes 0.343 for `yolov5nu`; the 0.9-point gap is the square vs
-rectangular letterbox difference noted above.
+### Regenerating COCO results
 
-### Regenerating
+Prepare the dataset on the laptop:
 
 ```bash
-python evaluation/prepare_coco.py --n 5000                    # laptop, one-off
+python evaluation/prepare_coco.py --n 5000
+```
+
+Generate detections on the Nano:
+
+```bash
 python3 evaluation/run_coco_detections.py \
-    --runtime tensorrt --precision fp16 --subset 5000         # Nano, ~9 min
+    --runtime tensorrt \
+    --precision fp16 \
+    --subset 5000
+```
+
+Score them on the laptop:
+
+```bash
 python evaluation/coco_eval.py \
     --detections results/detections_tensorrt_fp16.json \
-    --runtime tensorrt --precision fp16 --device nano --subset 5000
+    --runtime tensorrt \
+    --precision fp16 \
+    --device nano \
+    --subset 5000
 ```
 
-The split is deliberate: `pycocotools` compiles a C extension, so scoring stays on
-the laptop and one implementation scores every runtime.
+Scoring stays on the laptop so the same `pycocotools` environment is used for all three runtimes.
 
-## Reproducing a row
+## Docker comparison
 
-Every row can be regenerated from its own fields:
+The TensorRT FP16 pipeline was also benchmarked bare-metal and inside the L4T container using the same harness.
 
-```bash
-python benchmarks/benchmark.py \
-  --runtime pytorch --device cuda --precision fp32 \
-  --frames 500 --host-profile best-performance-mains \
-  --notes "reproduction"
-```
+| Metric | Bare metal | Docker |
+|---|---:|---:|
+| Inference | 50.77 +/- 0.03 ms | 50.84 +/- 0.02 ms |
+| End-to-end FPS | 12.57 +/- 0.01 | 12.49 +/- 0.02 |
+| Peak RSS | 1065 MB | 1109 MB |
+| Detections | identical | identical |
 
-Check out the `git_commit` from the row first. Rows marked `-dirty` cannot be
-reproduced exactly, since the code that produced them was never committed.
+Measured differences:
+
+- inference: +0.14% in the container
+- end-to-end FPS: -0.66%
+- preprocessing: +2.48%
+- peak RSS: +44 MB
+
+The container had very little effect on TensorRT inference time. Most of the small end-to-end difference came from preprocessing.
+
+## Sustained thermal and power-mode runs
+
+TensorRT FP16 was run continuously for 10 minutes at two Jetson operating points. These runs are recorded separately from the repeated headline benchmarks above.
+
+| Metric | 10 W / MAXN | 5 W |
+|---|---:|---:|
+| Run ID | `6348178c575d` | `585939e8ae8b` |
+| Clock lock | `true` | `false` |
+| Fan policy | `auto` | `auto` |
+| Frames | 7,512 | 5,118 |
+| FPS first 60 s | 12.61 | 8.65 |
+| FPS last 60 s | 12.49 | 8.46 |
+| First-to-last change | -0.94% | -2.11% |
+| GPU temperature | 33.0 -> 45.0 C | 34.0 -> 44.5 C |
+| Maximum GPU temperature | 50.0 C | 44.5 C |
+| Sustained FPS / configured W | 1.249 | 1.692 |
+
+At 5 W the Nano sustained 8.46 FPS versus 12.49 FPS at the recorded 10 W operating point. That is 67.7% of the 10 W throughput.
+
+Using the configured `nvpmodel` limits, the two runs work out to 1.692 versus 1.249 FPS per configured watt, a difference of 35.5%.
+
+No direct electrical power measurement was taken. These numbers are therefore reported as throughput per configured power envelope, not measured energy efficiency.
+
+The clock settings are also different between the two runs. The 10 W run used locked clocks and the 5 W run did not, so this is a comparison of the two recorded deployment operating points rather than an isolated `nvpmodel` experiment.
+
+At 10 W the GPU reached 50 C and the stock thermal governor switched the fan on at PWM 80. The run continued at roughly the same throughput while the temperature fell back toward 45 C. The 5 W run peaked at 44.5 C and the fan stayed off.
+
+Plots:
+
+- `plots/thermal_6348178c575d.png`
+- `plots/thermal_585939e8ae8b.png`
 
 ## Measurement protocol
 
-Established after the power-profile findings, and followed for every row in
-`speed.csv`:
+For the repeated headline benchmarks:
 
-1. **Mains power.** Battery costs 2.6× on CPU inference regardless of the
-   Windows power setting.
-2. **Highest performance profile**, and recorded in `host_profile`.
-3. **Three runs minimum per configuration.** Two runs cannot establish a
-   difference below roughly 15% — an 8.4% FP16-vs-FP32 gap was first observed,
-   then withdrawn as noise, then confirmed once eight and six samples existed.
-4. **GPU runs before CPU runs**, so CPU load does not heat the machine and skew
-   the GPU measurements.
-5. **~30 s between runs**, so each starts from a similar thermal state.
-6. On the Jetson: `nvpmodel` mode set and `jetson_clocks` applied, both recorded.
+1. Run from mains power.
+2. Record the active host/power profile.
+3. Run each configuration at least three times.
+4. Run GPU tests before CPU tests on the laptop.
+5. Leave roughly 30 seconds between repeated runs.
+6. On the Nano, record `nvpmodel`, clock-lock state and fan configuration.
 
-## Current variance
+Long thermal runs use their own recorded settings and are not assumed to follow the same clock policy as the headline benchmark rows.
+
+## Current timing variance
 
 | Configuration | n | Inference | CV |
-|---|---|---|---|
-| **Nano TensorRT FP32** | 3 | 70.89 ± 0.01 ms | **0.014%** |
-| **Nano TensorRT FP16** | 3 | 50.64 ± 0.12 ms | 0.23% |
-| Nano TorchScript FP32 | 3 | 93.15 ± 0.47 ms | 0.50% |
-| Laptop GPU FP32 | 8 | 13.94 ± 1.08 ms | 7.7% |
-| Laptop GPU FP16 | 6 | 15.11 ± 0.42 ms | 2.8% |
+|---|---:|---:|---:|
+| Nano TensorRT FP32 | 3 | 70.89 +/- 0.01 ms | 0.014% |
+| Nano TensorRT FP16 | 3 | 50.64 +/- 0.12 ms | 0.23% |
+| Nano TorchScript FP32 | 3 | 93.15 +/- 0.47 ms | 0.50% |
+| Laptop GPU FP32 | 8 | 13.94 +/- 1.08 ms | 7.7% |
+| Laptop GPU FP16 | 6 | 15.11 +/- 0.42 ms | 2.8% |
 | Laptop CPU FP32 | 6 | ~47.5 ms | ~4% |
 
-**The Nano is up to 500× more reproducible than the laptop.** Locked clocks,
-nothing else running, and a power mode that is explicit and honoured. A
-constrained embedded board turns out to be a far better measurement instrument
-than a general-purpose laptop.
+The Jetson runs have much lower relative timing variance than the laptop runs. For small differences, compare against the CV before treating the change as real.
 
-On the laptop, FP32 is roughly 2.7× noisier than FP16 — consistent with it
-pushing the GPU harder and hitting the power ceiling more often.
+## Reproducing a benchmark row
 
-**Any comparison smaller than the relevant CV should not be treated as a
-difference.**
+A benchmark can be rerun from the configuration recorded in `speed.csv`. Example:
+
+```bash
+python benchmarks/benchmark.py \
+  --runtime pytorch \
+  --device cuda \
+  --precision fp32 \
+  --frames 500 \
+  --host-profile best-performance-mains \
+  --notes "reproduction"
+```
+
+Check out the `git_commit` recorded in the row first. A row marked `-dirty` cannot be reproduced exactly because the working tree contained uncommitted changes.

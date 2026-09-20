@@ -1,26 +1,14 @@
 # EdgeVision - Production Edge AI Deployment on NVIDIA Jetson Nano
 
-[![TensorRT](https://img.shields.io/badge/TensorRT-8.2-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/tensorrt)
-[![Jetson](https://img.shields.io/badge/Jetson%20Nano-2GB-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/embedded/jetson-nano)
-[![ONNX](https://img.shields.io/badge/ONNX-005CED?style=flat&logo=onnx&logoColor=white)](https://onnx.ai/)
-[![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
-[![PyCUDA](https://img.shields.io/badge/PyCUDA-3776AB?style=flat&logo=python&logoColor=white)](https://documen.tician.de/pycuda/)
-[![Python](https://img.shields.io/badge/Python-3.6%20%7C%203.10-blue?style=flat&logo=python)](https://www.python.org/)
+[![TensorRT](https://img.shields.io/badge/TensorRT-8.2-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/tensorrt) [![Jetson](https://img.shields.io/badge/Jetson%20Nano-2GB-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/embedded/jetson-nano) [![ONNX](https://img.shields.io/badge/ONNX-005CED?style=flat&logo=onnx&logoColor=white)](https://onnx.ai/) [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/) [![PyCUDA](https://img.shields.io/badge/PyCUDA-3776AB?style=flat&logo=python&logoColor=white)](https://documen.tician.de/pycuda/) [![Python](https://img.shields.io/badge/Python-3.6%20%7C%203.10-blue?style=flat&logo=python)](https://www.python.org/)
 
-Taking an object detector from a PyTorch checkpoint to an optimised inference
-engine on an **NVIDIA Jetson Nano 2GB** — measuring latency, accuracy, memory and
-thermal behaviour at every step, with error bars.
+EdgeVision takes an object detector from a PyTorch checkpoint to an optimized TensorRT deployment on an **NVIDIA Jetson Nano 2GB**, with latency, accuracy, memory, container overhead and thermal behavior measured along the way.
 
-**TensorRT FP16 runs 1.84× faster than TorchScript FP32 on the same board, for a
-0.03% mAP loss** — measured over the full 5,000-image COCO validation set.
+**TensorRT FP16 runs 1.84× faster than TorchScript FP32 on the same board, with an absolute mAP@50-95 change of 0.0001 (~0.03% relative) on the full 5,000-image COCO val2017 set.**
 
 ![TensorRT FP16 vs TorchScript FP32 on Jetson Nano](assets/demo_comparison.gif)
 
-*TorchScript FP32 (top) vs TensorRT FP16 (bottom). Same model, same video, same
-board — a Jetson Nano 2GB at 10 W with passive cooling and clocks locked. The FPS
-counters are measured end-to-end throughput; playback is 2× real speed. Both
-configurations score within 0.0001 mAP@50-95 of each other on COCO val2017.*
-
+*TorchScript FP32 (top) vs TensorRT FP16 (bottom). Same model, video and Jetson Nano 2GB at 10 W with clocks locked. The counters show end-to-end throughput; playback is 2× real speed.*
 
 <img src="assets/Jetson_Nano.jpg" width="480" alt="The Jetson Nano 2GB used for this project">
 
@@ -47,7 +35,7 @@ configurations score within 0.0001 mAP@50-95 of each other on COCO val2017.*
 
 ## Results
 
-Unless otherwise stated, the headline runtime benchmarks below were measured at **10 W (`nvpmodel -m 0`) with clocks locked (`jetson_clocks`) and fan off**, batch size 1, 640×640 input, 500 frames per run, three runs per configuration. The sustained thermal and power-mode study uses its separately documented 10-minute configurations.
+Unless otherwise stated, the repeated runtime benchmarks below were measured at **10 W (`nvpmodel -m 0`) with clocks locked (`jetson_clocks`) and fan off**, batch size 1, 640×640 input, 500 frames per run and three runs per configuration. The 10-minute sustained runs use their own recorded operating-point settings.
 
 ### Jetson Nano 2GB
 
@@ -57,37 +45,28 @@ Unless otherwise stated, the headline runtime benchmarks below were measured at 
 | TensorRT | FP32 | 70.89 ± 0.01 | 14.11 | 10.04 | 4.6 s | 1414 MB | **0.014%** |
 | **TensorRT** | **FP16** | **50.64 ± 0.12** | **19.75** | **12.60** | **4.1 s** | **1086 MB** | 0.23% |
 
-**Where the 1.84× comes from.** Building both TensorRT engines separates the two
-effects, which a single FP16-versus-baseline number cannot:
+The speedup can be separated into the runtime change and the precision change:
 
-| Change | Speedup | Mechanism |
+| Change | Speedup | Main effect |
 |---|---|---|
-| TorchScript → TensorRT (both FP32) | **1.31×** | kernel fusion, auto-tuned kernel selection, static memory planning |
-| TensorRT FP32 → FP16 | **1.40×** | halved memory traffic on a bandwidth-bound board |
+| TorchScript → TensorRT (FP32) | **1.31×** | TensorRT kernel selection, fusion and static memory planning |
+| TensorRT FP32 → FP16 | **1.40×** | Lower precision and lower memory traffic |
 | Combined | **1.84×** | 1.31 × 1.40 |
 
-**FP16 also saves 328 MB.** On a board with ~1.4 GB usable, FP32 at 1414 MB is
-effectively at the ceiling — so half precision buys headroom as well as speed, and
-the headroom may matter more.
+FP16 also reduced the measured peak process memory by **328 MB** compared with TensorRT FP32.
 
-**Latency percentiles.** Tail latency matters more than the mean for a real-time
-system — a mean of 46 ms with a p99 of 200 ms means one frame in a hundred
-arrives catastrophically late.
+### Latency percentiles
 
 | Runtime | Engine p50 | Engine p95 | End-to-end p50 | End-to-end p95 |
 |---|---|---|---|---|
 | TorchScript FP32 | 93.4 ms | 93.7 ms | 122.1 ms | 122.8 ms |
 | **TensorRT FP16** | **51.7 ms** | **51.9 ms** | **79.6 ms** | **80.3 ms** |
 
-p95 sits within **0.5%** of p50 on both runtimes. That tightness is itself a
-finding about the platform: with clocks locked and nothing else running, the
-Jetson produces a far more predictable frame time than the laptop, where p95 ran
-30–50% above p50.
+For both on-device runtimes, p95 stayed within about 0.5% of p50 under the locked-clock benchmark setup.
 
-### Development laptop — RTX 3050 Laptop, i9-11900H
+### Development laptop - RTX 3050 Laptop, i9-11900H
 
-Reference only. Not the target platform, and see [Limitations](#limitations)
-regarding the clock ceiling.
+These figures are reference measurements only; the Jetson Nano is the target platform.
 
 | Runtime | Precision | Inference (ms) | Engine FPS | End-to-end FPS | CV |
 |---|---|---|---|---|---|
@@ -96,35 +75,21 @@ regarding the clock ceiling.
 | PyTorch (GPU) | FP16 | 15.11 ± 0.42 | 67.51 | 41.47 | 2.8% |
 | TorchScript (GPU) | FP32 | 8.33 ± 0.81 | 120.79 | 57.47 | 9.7% |
 
-### Deployment overhead — container vs bare metal
+### Deployment overhead - container vs bare metal
 
-Six runs in one session, three of each, **both measured with the same harness** —
-`benchmarks/benchmark.py`, mounted into the container rather than baked in.
+Six runs were recorded in one session, three bare-metal and three container runs, using the same `benchmarks/benchmark.py` harness.
 
 | Metric | Bare metal | Container | Difference |
 |---|---|---|---|
 | Inference | 50.77 ± 0.03 ms | 50.84 ± 0.02 ms | **+0.14%** |
-| End-to-end FPS | 12.57 ± 0.01 | 12.49 ± 0.02 | **−0.66%** |
-| **Preprocess** | 13.95 ± 0.01 ms | **14.30 ± 0.04 ms** | **+2.48%** |
+| End-to-end FPS | 12.57 ± 0.01 | 12.49 ± 0.02 | **-0.66%** |
+| Preprocess | 13.95 ± 0.01 ms | 14.30 ± 0.04 ms | **+2.48%** |
 | Peak memory | 1065 MB | 1109 MB | +4.06% |
 | Detections | 8.32 | 8.32 | identical |
 
-**The GPU path is free. The 0.66% end-to-end cost is entirely CPU-side.**
-
-Inference differs by 0.14% — inside the noise, exactly as the
-namespaces-not-virtualisation model predicts. But **preprocessing is 2.48% slower**,
-well outside the 0.08% CV, and preprocessing is `cv2.resize`, colour conversion and
-NumPy transposes.
-
-The likely cause is OpenCV: the container has the plain Debian `python3-opencv`,
-while the host has JetPack's 4.1.1, almost certainly built with NEON optimisations
-the Debian package lacks. A specific, explainable cost rather than a container tax.
-
-*CVs of 0.03–0.08% — the tightest measurements in this project.*
+TensorRT inference changed by only 0.14%. Most of the measurable container difference came from preprocessing. The host uses JetPack OpenCV 4.1.1, while the container uses the Debian `python3-opencv` package, which is the likely source of that difference.
 
 ### Pipeline breakdown
-
-Where the time actually goes. **Three of the four stages run on the CPU.**
 
 | Stage | Laptop (GPU FP32) | Nano (TensorRT FP16) | Ratio |
 |---|---|---|---|
@@ -134,10 +99,11 @@ Where the time actually goes. **Three of the four stages run on the CPU.**
 | postprocess + NMS | 2.16 ms | 8.77 ms | 4.1× |
 | **CPU share of frame** | **40%** | **35%** | |
 
+The engine reaches 19.75 FPS, while the complete pipeline reaches 12.60 FPS. Capture, preprocessing and postprocessing remain part of the end-to-end cost.
+
 ### Decoder validation
 
-The NumPy decoder was validated against Ultralytics on 10 frames, matched at
-IoU ≥ 0.9 and same class:
+The NumPy decoder was checked against Ultralytics on 10 frames using IoU ≥ 0.9 and matching class IDs.
 
 | Metric | Result |
 |---|---|
@@ -145,39 +111,21 @@ IoU ≥ 0.9 and same class:
 | Box coordinate error, mean | **0.546 px** |
 | Score error, mean | 0.018 |
 
-Every unmatched detection fell between confidence 0.252 and 0.287, against a 0.25
-threshold — borderline cases. In one frame the NumPy decoder produced three tight
-boxes on three kites where Ultralytics merged them into a single box spanning the
-whole scene.
+The unmatched cases were close to the confidence threshold (0.252-0.287 with a threshold of 0.25).
 
-### Accuracy after optimisation
+### Accuracy after optimization
 
-Full COCO val2017 — **5,000 images, 36,781 annotations** — scored with
-`pycocotools` at the standard evaluation threshold of 0.001.
+Full COCO val2017: **5,000 images and 36,781 annotations**, evaluated with `pycocotools` using a confidence threshold of 0.001.
 
 | Runtime | Precision | mAP@50-95 | mAP@50 | mAP@75 | Detections | Δ mAP@50-95 |
 |---|---|---|---|---|---|---|
 | TorchScript | FP32 | 0.3343 | 0.5005 | 0.3529 | 530,418 | baseline |
 | TensorRT | FP32 | **0.3343** | **0.5005** | **0.3529** | 530,417 | **0.0000** |
-| TensorRT | FP16 | 0.3342 | 0.5003 | 0.3529 | 531,012 | **−0.0001** |
+| TensorRT | FP16 | 0.3342 | 0.5003 | 0.3529 | 531,012 | **-0.0001** |
 
-**TorchScript and TensorRT FP32 give identical mAP to four decimal places**, and
-differ by **one detection out of 530,418**. Two entirely different inference
-engines producing the same numbers — the conversion is faithful, not merely close.
+TorchScript FP32 and TensorRT FP32 match to four decimal places. TensorRT FP16 changes mAP@50-95 by 0.0001 while reducing latency and memory use.
 
-**FP16 costs 0.0001 mAP@50-95 — 0.03%** — for 1.40× speed and 328 MB less memory.
-mAP@75 is unchanged.
-
-**The pipeline validates against the published figure.** Ultralytics reports
-**0.343** for `yolov5nu`; this measures **0.3343**, 0.9 points lower. The gap is
-explained: Ultralytics evaluates with a rectangular stride-aligned letterbox and
-`max_det=300`, while this project pads to a square 640×640 — what the ONNX export
-declares and the engine was built for.
-
-That agreement is what proves the hand-written decoder, the letterbox-undo maths
-and the COCO category mapping are all correct. A subtly wrong decoder still
-produces detections, so the 99.2% Ultralytics agreement was necessary but not
-sufficient; mAP against real ground truth cannot be fooled.
+Ultralytics publishes a higher reference figure for `yolov5nu` than this pipeline measures. This project uses its own fixed square 640×640 preprocessing and evaluation path, so the published number and the result above are not identical evaluation protocols. The important comparison here is between runtimes under the same project pipeline.
 
 | Object size | mAP@50-95 (TensorRT FP16) |
 |---|---|
@@ -185,34 +133,26 @@ sufficient; mAP against real ground truth cannot be fooled.
 | medium | 0.369 |
 | large | 0.468 |
 
-Small objects are three times harder than large — the expected profile for a
-nano-scale detector at 640×640.
+### Sustained operating-point study
 
-### Sustained thermal and power-mode study
-
-TensorRT FP16 was run continuously for 10 minutes under both Jetson power modes.
+TensorRT FP16 was run continuously for 10 minutes at two Jetson operating points.
 
 | Metric | 10 W / MAXN | 5 W |
 |---|---:|---:|
+| Clock state | locked (`jetson_clocks`) | unlocked |
 | Frames | 7,512 | 5,118 |
 | FPS first 60 s | 12.61 | 8.65 |
 | FPS last 60 s | **12.49** | **8.46** |
-| First-to-last degradation | **−0.94%** | **−2.11%** |
+| First-to-last degradation | **-0.94%** | **-2.11%** |
 | GPU temperature | 33.0 → 45.0 °C | 34.0 → 44.5 °C |
 | Maximum GPU temperature | **50.0 °C** | **44.5 °C** |
 | Sustained FPS / nominal W | **1.249** | **1.692** |
 
-At 5 W the Nano retains **67.7% of the 10 W sustained throughput** while using
-half the configured power envelope. Expressed against the nominal `nvpmodel`
-limits, this is a **35.5% improvement in throughput per configured watt**.
+At the measured 5 W operating point, the Nano sustained 8.46 FPS versus 12.49 FPS at the measured 10 W operating point. Using the configured `nvpmodel` limits, that is 1.692 versus 1.249 FPS per nominal watt.
 
-This is not a direct electrical power measurement: 5 W and 10 W are the configured
-`nvpmodel` power envelopes, not measured board power. The result is therefore
-reported as **nominal FPS/W**, not true energy efficiency.
+No direct electrical power measurement was taken. These values are normalized against the configured power envelopes, not measured board power. The two sustained runs also used different clock-lock states, so this should be treated as a comparison of the two measured deployment operating points rather than an isolated `nvpmodel`-only experiment.
 
-During the 10 W run the GPU reached **50 °C**, at which point the stock thermal
-governor engaged the fan at PWM 80. Temperature then fell to 45 °C while inference
-continued. At 5 W the GPU never reached the fan threshold.
+During the 10 W run the GPU reached **50 °C**, the stock thermal governor engaged the fan at PWM 80, and the temperature returned to about 45 °C while inference continued. The 5 W run peaked at 44.5 °C and did not trigger the fan.
 
 <p align="center">
   <img src="results/plots/thermal_6348178c575d.png" width="49%" alt="10 W thermal run">
@@ -223,39 +163,26 @@ continued. At 5 W the GPU never reached the fan threshold.
 
 ## What this project is
 
-Most object detection projects stop at "the model works". This one starts there
-and answers the questions an embedded team asks before shipping:
+EdgeVision is an end-to-end deployment project for running a YOLO-family object detector on a constrained Jetson Nano 2GB. The focus is not only model conversion, but also measuring what changes when the model moves from PyTorch to TensorRT and then into a deployable container.
 
-- **How fast is it end-to-end**, not just the engine? *(1.53× vs 1.84× — see the
-  breakdown above.)*
-- **How much accuracy did the optimisation cost?** *(0.03% mAP@50-95, measured on
-  the full COCO validation set.)*
-- **How reproducible is the measurement?** *(CV of 0.25% on the Nano across three
-  runs.)*
-- **How long does it take to start?** *(4.1 s vs 24.3 s — rarely reported, and it
-  matters for a service.)*
+The project covers:
 
-The target hardware is deliberately constrained: a Jetson Nano 2GB with a Maxwell
-GPU, **no tensor cores**, no INT8, and roughly 1.4 GB of usable shared memory.
-Constraints this tight make the engineering decisions visible.
+- PyTorch → ONNX → TensorRT conversion with parity checks
+- TorchScript as the on-device PyTorch baseline
+- Hand-written NumPy decoding and NMS for the Nano's Python 3.6 environment
+- End-to-end benchmarking, including cold start and per-stage timings
+- Full COCO val2017 accuracy evaluation
+- Bare-metal vs Docker comparison
+- Sustained thermal and 5 W / 10 W operating-point measurements
+- Reproducible result records using git commit SHA and configuration hashes
 
-**Key capabilities**
-
-- PyTorch → ONNX → TensorRT conversion with numerical parity verified at each step
-- Hand-written NumPy postprocessing — validated against Ultralytics at 99.2%
-  agreement, and necessary because Ultralytics cannot run on the Nano's Python 3.6
-- One benchmark harness reused across every runtime, so differences reflect the
-  runtimes rather than the measurement method
-- Cold start separated from steady state; engine throughput separated from
-  end-to-end
-- Every result carries a git commit SHA and a config hash
-- Containerised on `l4t-base`, with the overhead measured rather than assumed
+The target is intentionally constrained: Jetson Nano 2GB, JetPack 4.6, CUDA 10.2, TensorRT 8.2 and Python 3.6.
 
 ---
 
 ## Architecture
 
-```
+```text
 video file / IMX219 camera
         │
         ▼
@@ -268,7 +195,7 @@ video file / IMX219 camera
   inference backend   ◄── TensorRT | TorchScript | ONNX Runtime | PyTorch
         │                  behind one interface, selected at runtime
         ▼
-  postprocess  (decode 1×84×8400, per-class NMS — hand-written NumPy)
+  postprocess  (decode 1×84×8400, per-class NMS - hand-written NumPy)
         │
         ├──────────────►  detection sink (JSONL; ROS2 optional)
         │
@@ -279,8 +206,6 @@ video file / IMX219 camera
 
   systemd watchdog wraps the process (Restart=always)
 ```
-
-**Where things run:**
 
 | Laptop (Python 3.10) | Jetson Nano (Python 3.6) |
 |---|---|
@@ -293,136 +218,109 @@ video file / IMX219 camera
 
 ## Project Structure
 
-```
+```text
 edgevision/
 │
-├── app/                              # the inference pipeline — this is what deploys
-│   ├── preprocess.py                 # letterbox, BGR→RGB, normalise, HWC→CHW
-│   ├── postprocess.py                # decode (1,84,8400) + per-class NMS, NumPy
-│   └── backends.py                   # PyTorch / TorchScript / ONNX / TensorRT
-│                                     #   behind one load()/infer() interface
-├── models/
-│   ├── export_to_onnx.py             # PyTorch → ONNX (fixed shape, opset 13)
-│   ├── export_torchscript.py         # PyTorch → TorchScript (no Ultralytics needed)
-│   ├── check_onnx.py                 # validate opset and shapes before transfer
-│   ├── check_torchscript.py          # verify it loads with torch alone
-│   └── build_trt_engine.py           # ONNX → TensorRT — run ON the Nano
+├── app/
+│   ├── preprocess.py
+│   ├── postprocess.py
+│   └── backends.py
 │
-├── benchmarks/                       # measurement, kept apart from what it measures
-│   ├── benchmark.py                  # the harness — reused unchanged throughout
-│   ├── render_demo.py                # annotated video with live FPS overlay
-│   ├── compose_demo.py               # side-by-side comparison, retimed to real speed
-│   └── make_report.py                # CSVs → README tables + plots
+├── models/
+│   ├── export_to_onnx.py
+│   ├── export_torchscript.py
+│   ├── check_onnx.py
+│   ├── check_torchscript.py
+│   └── build_trt_engine.py
+│
+├── benchmarks/
+│   ├── benchmark.py
+│   ├── render_demo.py
+│   ├── compose_demo.py
+│   └── make_report.py
 │
 ├── evaluation/
-│   ├── validate_decoder.py           # NumPy decoder vs Ultralytics reference
-│   └── coco_eval.py                  # mAP on the full COCO val2017 set
+│   ├── validate_decoder.py
+│   └── coco_eval.py
 │
 ├── tests/
-│   ├── test_parity.py                # PyTorch vs ONNX numerical agreement
-│   └── test_regression.py            # accuracy gate — fails CI on mAP drop
+│   ├── test_parity.py
+│   └── test_regression.py
 │
-├── monitoring/                       # prometheus_client exporter, Grafana dashboard
-├── systemd/                          # Restart=always + watchdog
-├── docker/                           # Dockerfile.jetson on l4t-base r32.7.1
-│
-├── configs/params.yaml               # single source of configuration
-│
+├── monitoring/
+├── systemd/
+├── docker/
+├── configs/
 ├── docs/
-│   ├── SETUP_LOG.md                  # every command, its output, and why
-│   └── GIT_NOTES.md
-│
-├── results/                          # a deliverable, NOT gitignored
-│   ├── speed.csv                     # one row per benchmark run
-│   ├── speed_exploratory.csv         # earlier runs, mixed power profiles
-│   ├── raw/                          # per-frame timing arrays (.npz)
-│   └── README.md                     # schema and measurement protocol
-│
-├── data/                             # test video (gitignored)
-├── assets/                           # demo GIF, comparison images
-├── PROJECT_PLAN.md
-├── NOTES.md                          # running build log, including what went wrong
+│   └── SETUP_LOG.md
+├── results/
+│   ├── speed.csv
+│   ├── speed_exploratory.csv
+│   ├── raw/
+│   ├── plots/
+│   └── README.md
+├── data/
+├── assets/
 └── README.md
 ```
 
-**Why `app/`, `benchmarks/` and `evaluation/` are separate** rather than one
-`src/`: they have different lifetimes. `app/` is what the Docker container
-deploys. `benchmarks/` is a tool run *against* it. `evaluation/` only ever runs on
-the laptop, where Ultralytics and the COCO data live. Splitting them means the
-deployment image copies `app/` alone — which matters on a 2 GB board.
+`app/`, `benchmarks/` and `evaluation/` are kept separate because they serve different purposes. `app/` is the deployable inference code, `benchmarks/` measures it, and `evaluation/` contains laptop-side validation tools.
 
 ---
 
 ## Technology Stack
 
 | Tool | Role |
-|------|------|
-| **TensorRT 8.2** | Target inference engine — the optimised path |
-| **PyCUDA** | Device memory allocation and host↔device transfers |
-| **TorchScript** | Frozen graph — the PyTorch baseline *on device*, since Ultralytics cannot run there |
-| **PyTorch 1.10** | NVIDIA aarch64 wheel on the Nano; 2.5.1+cu121 on the laptop |
-| **ONNX / ONNX Runtime** | Interchange format and cross-runtime parity checks |
-| **CUDA 10.2 / cuDNN** | Pinned by JetPack 4.6; not independently upgradeable |
-| **OpenCV 4.1.1 + GStreamer** | Capture and preprocessing (JetPack build, not pip) |
-| **NumPy** | Hand-written box decoding and NMS |
-| **Ultralytics** | Laptop only — export, and as the decoder reference |
-| **Docker** | `l4t-base` deployment container, built on-device. TensorRT-only, no torch |
-| **Prometheus / Grafana** | Metrics collection and dashboards |
-| **systemd** | Process supervision and watchdog |
-| **jetson-stats (`jtop`)** | Live thermal, power and utilisation monitoring |
-| **ffmpeg** | Test video normalisation, demo composition |
-| **ROS2** | Detection publishing — *optional extension, not in v1* |
+|---|---|
+| **TensorRT 8.2** | Target inference engine |
+| **PyCUDA** | Device memory allocation and host/device transfers |
+| **TorchScript** | On-device PyTorch baseline |
+| **PyTorch 1.10** | NVIDIA aarch64 wheel on Nano |
+| **ONNX / ONNX Runtime** | Model interchange and parity checks |
+| **CUDA 10.2 / cuDNN** | JetPack 4.6 GPU stack |
+| **OpenCV 4.1.1 + GStreamer** | Capture and preprocessing |
+| **NumPy** | Box decoding and NMS |
+| **Ultralytics** | Laptop-side export and decoder reference |
+| **Docker** | `l4t-base` deployment container |
+| **Prometheus / Grafana** | Planned metrics and dashboards |
+| **systemd** | Planned process supervision and watchdog |
+| **jetson-stats (`jtop`)** | Thermal, power and utilization monitoring |
+| **ffmpeg** | Test video normalization and demo composition |
+| **ROS2** | Optional detection-publishing extension after v1 |
 
 ---
 
 ## Pipeline Stages
 
-### 1. Export — `models/export_to_onnx.py`, `models/export_torchscript.py`
+### 1. Export - `models/export_to_onnx.py`, `models/export_torchscript.py`
 
-Fixed input shape; dynamic shapes complicate TensorRT for no benefit here.
-**Opset 13** — TensorRT 8.2 supports roughly opset 13–14, and a newer opset
-exports cleanly then fails at engine build.
+The model is exported with a fixed 640×640 input. ONNX uses opset 13 for compatibility with the TensorRT version shipped with JetPack 4.6.
 
-`check_onnx.py` and `check_torchscript.py` verify the artifacts before transfer —
-cheaper than discovering a problem after an 11-minute engine build on the board.
+`check_onnx.py` and `check_torchscript.py` verify the exported artifacts before they are copied to the Nano.
 
-### 2. Engine build — `models/build_trt_engine.py`
+### 2. Engine build - `models/build_trt_engine.py`
 
-**Must run on the Jetson.** TensorRT auto-tunes by timing candidate kernels on the
-actual GPU, so the engine embeds choices specific to that architecture and
-TensorRT version. An engine built elsewhere will not deserialise.
+TensorRT engines are built on the Jetson Nano. The builder benchmarks candidate kernels on the target GPU, so the resulting engine is tied to the target architecture and TensorRT environment.
 
-### 3. Inference — `app/backends.py`
+### 3. Inference - `app/backends.py`
 
-All four runtimes implement `load()` and `infer()`, so `benchmark.py` never knows
-which it holds. Device buffers are allocated once in `load()`, never per frame.
+The runtime backends expose the same `load()` and `infer()` interface. Device buffers are allocated during `load()` and reused across frames.
 
-The TensorRT backend manages its CUDA context explicitly rather than using
-`pycuda.autoinit`, which destroys the context before TensorRT's engine is
-collected and segfaults on teardown.
+The TensorRT backend manages its CUDA context explicitly instead of relying on `pycuda.autoinit`.
 
-### 4. Postprocess — `app/postprocess.py`
+### 4. Postprocess - `app/postprocess.py`
 
-Decodes the raw `(1, 84, 8400)` tensor: 8400 candidates across strides 8/16/32,
-each with 4 box values and 80 class scores. **No objectness column** — this is an
-anchor-free head, and assuming otherwise shifts every class score by one.
+The model output has shape `(1, 84, 8400)`: four box values and 80 class scores for 8,400 candidates. The decoder and per-class NMS are implemented in NumPy because Ultralytics does not run in the Nano's Python 3.6 environment.
 
-Written from scratch because Ultralytics cannot run on the Nano. Validated at
-99.2% agreement with 0.546 px mean box error.
+The implementation was checked against Ultralytics with 99.2% agreement and 0.546 px mean box-coordinate error.
 
-### 5. Benchmark — `benchmarks/benchmark.py`
+### 5. Benchmark - `benchmarks/benchmark.py`
 
-Written **before** any optimisation and reused unchanged, so differences between
-results reflect the runtimes rather than the measurement method.
+The same benchmark harness is reused across runtimes. It records cold start separately from steady-state inference and reports engine latency, end-to-end latency, per-stage timing, percentiles, memory, temperature and power-mode metadata.
 
-Separates cold start from steady state, and engine throughput from end-to-end.
-Reports p50/p95, per-stage timings, sustained FPS over the final 60 s, peak
-memory, temperature and power mode.
+### 6. Evaluate - `evaluation/coco_eval.py`
 
-### 6. Evaluate — `evaluation/coco_eval.py`
-
-mAP@50, mAP@50-95, precision and recall on the full 5,000-image COCO val2017 set,
-held constant across every runtime
+The evaluation script measures COCO mAP on the full 5,000-image val2017 set using the same project preprocessing and postprocessing path for each runtime.
 
 ---
 
@@ -434,10 +332,10 @@ held constant across every runtime
 |---|---|
 | Board | Jetson Nano 2GB Developer Kit (P3541) |
 | Storage | 128 GB microSD, UHS-I U3 / V30 |
-| Power | **5.1 V / 3 A USB-C** — a phone charger will brown out under load |
+| Power | **5.1 V / 3 A USB-C** |
 | Cooling | 40 mm 5 V fan; stock thermal governor retained during sustained tests |
-| Camera | Raspberry Pi Camera Module v2 (IMX219) — optional; video file works |
-| Software | JetPack 4.6.x (L4T 32.7.x). The 2GB board cannot run JetPack 5 or 6. |
+| Camera | Raspberry Pi Camera Module v2 (IMX219), optional |
+| Software | JetPack 4.6.x (L4T 32.7.x) |
 
 ### 1. Clone
 
@@ -457,35 +355,35 @@ pip install ultralytics onnx onnxruntime-gpu onnxslim pyyaml psutil pytest
 ### 3. Jetson
 
 ```bash
-# free ~320 MB by disabling the desktop
+# free memory by disabling the desktop
 sudo systemctl set-default multi-user.target
 
-sudo pip3 install jetson-stats                    # jtop
+sudo pip3 install jetson-stats
 
-# reduce SD card wear
+# reduce SD card writes
 sudo sed -i 's/errors=remount-ro/noatime,errors=remount-ro/' /etc/fstab
 echo "SystemMaxUse=50M" | sudo tee -a /etc/systemd/journald.conf
 
-# GPU access inside containers by default
+# make the NVIDIA runtime the Docker default
 sudo tee /etc/docker/daemon.json > /dev/null <<'EOF'
 { "default-runtime": "nvidia",
   "runtimes": { "nvidia": { "path": "nvidia-container-runtime", "runtimeArgs": [] } } }
 EOF
-sudo systemctl restart docker && sudo usermod -aG docker $USER
+sudo systemctl restart docker
+sudo usermod -aG docker $USER
 
-# an interrupted bootloader upgrade bricks the board
+# avoid accidental bootloader package changes
 sudo apt-mark hold nvidia-l4t-bootloader nvidia-l4t-init
 ```
 
-**PyCUDA** needs build isolation disabled — it declares `numpy==1.12.1`, a 2017
-release that no longer compiles against modern glibc:
+PyCUDA is installed without build isolation:
 
 ```bash
 export PATH=/usr/local/cuda/bin:$PATH
 pip3 install --user --no-build-isolation "pycuda==2020.1"
 ```
 
-**PyTorch** must come from NVIDIA's aarch64 wheel; PyPI has no Jetson build:
+PyTorch uses NVIDIA's Jetson aarch64 wheel:
 
 ```bash
 sudo apt-get install -y libopenblas-base libopenmpi-dev libomp-dev
@@ -493,39 +391,43 @@ wget <nvidia jetpack 4.6 torch 1.10 wheel> -O torch-1.10.0-cp36-cp36m-linux_aarc
 pip3 install --user --no-deps torch-1.10.0-cp36-cp36m-linux_aarch64.whl
 ```
 
-**torchvision is not required.** YOLOv5n is pure convolutions, so the TorchScript
-graph contains no torchvision operators and `torch.jit.load` works with torch
-alone — avoiding a 1–2 hour source compile on a 2 GB board.
+`torchvision` is not required for the exported TorchScript model used here.
 
-See [`docs/SETUP_LOG.md`](docs/SETUP_LOG.md) for every command with its output.
+See [`docs/SETUP_LOG.md`](docs/SETUP_LOG.md) for the full setup history and troubleshooting notes.
 
 ---
 
 ## Running the Pipeline
 
 ```bash
-# 1. Export (development machine)
+# 1. Export on the development machine
 python models/export_to_onnx.py
 python models/export_torchscript.py
 
-# 2. Copy to the Jetson (models and video are gitignored)
+# 2. Copy model artifacts and test video to the Jetson
 scp models/yolov5nu.onnx models/yolov5nu.torchscript \
     data/test_video.mp4 user@<jetson-ip>:~/EdgeVision/
 
-# 3. Build the engine — ON the Jetson
+# 3. Build TensorRT on the Jetson
 python3 models/build_trt_engine.py --precision fp16
 
 # 4. Benchmark
-sudo nvpmodel -m 0 && sudo jetson_clocks
-python3 benchmarks/benchmark.py --runtime tensorrt --precision fp16 \
-    --frames 500 --host-profile jetson-10w-clocks-locked-fan-off \
-    --clocks-locked true --fan false --notes "run 1"
+sudo nvpmodel -m 0
+sudo jetson_clocks
+
+python3 benchmarks/benchmark.py \
+    --runtime tensorrt \
+    --precision fp16 \
+    --frames 500 \
+    --host-profile jetson-10w-clocks-locked-fan-off \
+    --clocks-locked true \
+    --fan false \
+    --notes "run 1"
 ```
 
-### Containerised
+### Containerized run
 
-Must be built **on the Jetson** — the image is arm64 and PyCUDA compiles against
-the device's CUDA headers.
+The Jetson image is built on-device because it targets arm64 and PyCUDA compiles against the Jetson CUDA environment.
 
 ```bash
 docker build -f docker/Dockerfile.jetson -t edgevision:latest .
@@ -537,25 +439,16 @@ docker run --rm \
     edgevision:latest --runtime tensorrt --precision fp16 --frames 500
 ```
 
-**TensorRT is not installed in the image** — the nvidia container runtime mounts
-it from the host, which is why `import tensorrt` works inside a base image that
-contains none. Requires `"default-runtime": "nvidia"` in
-`/etc/docker/daemon.json`, or an explicit `--runtime nvidia`.
-
-Models and data are **mounted, not baked in**: a TensorRT engine only loads on the
-GPU that built it, and the video is large.
-
-The image excludes torch. TorchScript is the baseline for comparison, not the
-thing being shipped.
+TensorRT is supplied by the NVIDIA container runtime from the host rather than installed inside the image. Models and data are mounted instead of baked into the image.
 
 ### Demo video
 
 ```bash
-# on the Jetson
-python3 benchmarks/render_demo.py --runtime tensorrt   --precision fp16 --frames 300
+# Jetson
+python3 benchmarks/render_demo.py --runtime tensorrt --precision fp16 --frames 300
 python3 benchmarks/render_demo.py --runtime torchscript --precision fp32 --frames 300
 
-# on the laptop, after copying the MP4s and their JSON metadata across
+# laptop
 python benchmarks/compose_demo.py \
     --left assets/demo_torchscript_fp32.mp4 \
     --right assets/demo_tensorrt_fp16.mp4
@@ -565,7 +458,7 @@ python benchmarks/compose_demo.py \
 
 ## Benchmarking & Evaluation
 
-For the headline runtime benchmarks, lock the board state before measuring:
+For the repeated headline benchmarks:
 
 ```bash
 sudo nvpmodel -m 0
@@ -574,163 +467,77 @@ sudo jetson_clocks
 
 ### Measurement protocol
 
-Adopted after several measurements were silently invalidated by power state:
+1. Use mains power for laptop measurements.
+2. Record the active host performance profile.
+3. Use at least three runs for repeated headline configurations.
+4. Run GPU measurements before CPU measurements where possible.
+5. On the Jetson, record `nvpmodel`, clock-lock state and fan configuration for every run.
+6. Keep long-duration thermal runs separate from the repeated short benchmark protocol.
 
-1. **Mains power.** Battery costs 2.6× on laptop CPU inference regardless of the
-   Windows power setting.
-2. **Highest performance profile**, recorded in `--host-profile`. On Windows, a
-   vendor fan profile can cap GPU clocks at 10% of maximum while the OS reports
-   "best performance" — verify with `nvidia-smi --query-gpu=clocks.sm`.
-3. **Three runs minimum per configuration.** Two cannot establish a difference
-   below roughly 15%.
-4. **GPU runs before CPU runs**, so CPU load does not heat the machine.
-5. On the Jetson: `nvpmodel` mode, clock-lock state and fan configuration are explicitly recorded for every run.
+### Result storage
 
-### How results are stored
+Benchmark rows are append-only and include a configuration hash and git commit SHA. A `-dirty` suffix is added when the benchmark is run from a working tree with uncommitted changes.
 
-Two append-only CSVs, both committed, joined on `config_hash`. Every row records
-the **git commit SHA** — suffixed `-dirty` when the working tree had uncommitted
-changes — so a row cannot claim to come from code that is not what ran.
-
-See [`results/README.md`](results/README.md) for the full schema.
+See [`results/README.md`](results/README.md) for the result schema and run-level details.
 
 ---
 
 ## Findings
 
-**The engine/end-to-end gap is large and rarely reported.** 19.75 vs 12.60 FPS on
-the Nano — a 36% drop. Capture, preprocessing and NMS run on the CPU and are
-unchanged by any inference optimisation.
-
-**A prediction that failed.** CPU stages were expected to dominate on four ARM
-Cortex-A57 cores, since they were already 40% of the frame on an i9. They became a
-*smaller* share — 35% — because inference scaled 3.2× while CPU stages scaled only
-2.1–2.5×. Postprocessing was the exception at 4.1×: NMS is a sort-and-compare loop
-with no vectorisation benefit, which is what ARM does worst.
-
-**PyTorch FP16 gave no speedup; TensorRT FP16 gave 1.84×.** Same precision change,
-opposite outcomes. `.half()` converts dtypes while keeping the same layer-by-layer
-execution; TensorRT selects different fused kernels and halves actual memory
-traffic. On a bandwidth-bound board that is the whole game.
-
-**The Nano is a better measurement instrument than the laptop.** CV of 0.25%
-against the laptop's 2.8–7.7%. Clocks locked, nothing else running, and a power
-mode that is explicit and honoured.
-
-**Containerisation costs 0.66% end-to-end, and none of it is GPU overhead.**
-Inference differs by 0.14% — inside the noise — while preprocessing is 2.48%
-slower. The container's OpenCV is the plain Debian build; the host has JetPack's,
-likely with NEON optimisations. Docker is process isolation rather than
-virtualisation, so nothing sits between the code and the GPU; the cost is in a
-userspace library, not the runtime.
-
-**Ten minutes at 10 W produced less than 1% sustained throughput degradation.**
-TensorRT FP16 fell from 12.61 FPS over the first 60 seconds to 12.49 FPS over the
-last 60 seconds, a 0.94% change. The GPU reached 50 °C, triggered the stock fan
-governor, and then cooled to 45 °C without interrupting inference.
-
-**The 5 W mode trades throughput for substantially better nominal efficiency.**
-It sustained 8.46 FPS, retaining 67.7% of the 10 W throughput while using half
-the configured power envelope. That corresponds to 1.692 versus 1.249 sustained
-FPS per nominal watt, a 35.5% increase. These are power-envelope-normalised
-figures, not measurements of electrical board power.
-
-**An earlier version of this comparison had the wrong sign.** Container numbers
-came from `app/run.py` and bare-metal numbers from `benchmarks/benchmark.py` — two
-instruments. Re-measuring both with the same harness reversed the result. The
-error was small, but it would have been published as "containerisation is free".
-
-**Three implicit host dependencies only appeared inside the container.** Ubuntu's
-stock pip 9.0.1 predates `--no-build-isolation`; the container has no locale, so
-Python 3.6 fell back to ASCII and choked on an em dash *in a YAML comment*; and
-`pycuda.driver` imports `six` without declaring it. Each worked on the host by
-accident of its environment. **A container that builds and runs is a proof that
-the dependency list is complete.**
-
-**Cold start differs by 5.9×** — 24.3 s for TorchScript against 4.1 s for
-TensorRT. TorchScript deserialises and sets up a graph; TensorRT loads a
-pre-compiled engine.
-
-**Two different engines produced identical accuracy.** TorchScript and TensorRT
-FP32 scored 0.3343 / 0.5005 / 0.3529 on every metric and differed by one detection
-out of 530,418. That is the strongest available evidence the conversion is
-faithful — and it is only visible because the FP32 engine was built as a control.
-
-**Rebuilding the engine on an idle board made it 2.2% faster.** The same ONNX,
-the same script, the same workspace — but built headless with more free memory,
-letting the auto-tuner consider kernels it had previously skipped. TensorRT's
-auto-tuning is sensitive to the state of the machine it runs on.
-
-[`NOTES.md`](NOTES.md) records what went wrong as well as what worked, including
-two incorrect diagnoses and a conclusion that was withdrawn and later reinstated
-once enough samples existed.
+- **TensorRT FP16 improved on-device inference from 93.15 ms to 50.64 ms** compared with the TorchScript FP32 baseline, a 1.84× engine-level speedup.
+- **End-to-end throughput improved from 8.21 to 12.60 FPS.** The smaller 1.53× end-to-end gain reflects capture, preprocessing and NMS time outside the inference engine.
+- **TensorRT FP32 was useful as a control.** It matched TorchScript FP32 mAP to four decimal places, which helped verify that the conversion path was behaving as expected before introducing FP16.
+- **FP16 had negligible measured accuracy impact.** mAP@50-95 changed from 0.3343 to 0.3342 on COCO val2017.
+- **Container overhead was small.** TensorRT inference differed by 0.14%, while the larger 2.48% preprocessing difference was associated with the different OpenCV builds on host and container.
+- **The 10-minute 10 W run remained stable.** Throughput changed from 12.61 FPS in the first minute to 12.49 FPS in the last minute. The thermal governor engaged the fan when the GPU reached 50 °C.
+- **The measured 5 W operating point sustained 8.46 FPS.** Normalized by configured power envelope, it produced 1.692 nominal FPS/W versus 1.249 at the measured 10 W operating point. This is not a direct electrical efficiency measurement.
+- **Cold start was much shorter with TensorRT.** The measured startup time was 4.1 s versus 24.3 s for TorchScript.
+- **Benchmark methodology mattered.** An early Docker comparison used different measurement paths for host and container. Re-running both through the same harness changed the conclusion, so later comparisons use one benchmark path.
+- **TensorRT engine build conditions mattered.** Rebuilding the same model on a less-loaded board produced a measurable performance difference, so engine-build conditions are recorded with the results.
 
 ---
 
 ## Limitations
 
-Stated plainly, because a benchmark without its constraints is not a result.
-
-- **Batch size 1 only.** With ~1.4 GB usable shared memory there is no headroom
-  for batching, and single-stream latency is the metric that matters for this
-  class of device.
-- **No INT8 quantisation.** TensorRT's INT8 path requires compute capability 6.1
-  or higher for the DP4A instruction; this board is SM 5.3.
-  `platform_has_fast_int8` returns False and calibrators fail at engine build
-  rather than degrading gracefully. Among Jetson platforms, INT8 begins with
-  Xavier. FP16 is therefore the reduced-precision floor — a hardware constraint
-  identified and documented, not an experiment left undone.
-- **No tensor cores.** Maxwell supports native FP16 at 2× FP32 throughput, which
-  is why FP16 helps at all — but none of the tensor-core acceleration modern
-  Jetson benchmarks assume.
-- **Evaluation uses square 640×640 letterboxing**, not Ultralytics' rectangular
-  stride-aligned padding, and applies no explicit `max_det` cap. This accounts for
-  the 0.9-point gap against the published 0.343 figure. Square padding is required
-  here — it is what the ONNX export declares and the engine was built for.
-- **Laptop GPU clocks are capped.** The vendor power profile holds the RTX 3050
-  near 1057 MHz of a 2100 MHz ceiling, and utilisation peaks around 42%. Laptop
-  figures are therefore a lower bound and a reference point only; the Nano is the
-  measurement target. *(The disconnected GPU fan was initially blamed, then
-  measured to have no effect — the profile was the cause.)*
-- **Stock thermal management was retained for sustained runs.** Short benchmark
-  runs remained below the fan threshold, but the 10-minute 10 W run reached
-  **50 °C**, where the Jetson thermal governor automatically raised the fan to
-  PWM 80. The GPU subsequently cooled to 45 °C while inference continued.
-  The equivalent 5 W run peaked at 44.5 °C and never triggered the fan.
-- **JetPack 4.6 pins the stack.** CUDA 10.2, TensorRT 8.2, Python 3.6. FastAPI,
-  current `transformers` and much else cannot run on-device.
-- **Ultralytics cannot run on the Nano.** It requires Python 3.8+, while
-  TensorRT's bindings on JetPack 4.6 are built for the system Python 3.6 only —
-  mutually exclusive, and TensorRT wins. Export and COCO evaluation run on the
-  laptop; postprocessing on the board is written by hand.
-- **TensorRT 8.2 predates native LayerNorm support** (added in 8.6), so
-  transformer architectures decompose into elementwise operations and run slower
-  than the architecture warrants.
-- **The container's OpenCV is not JetPack's.** `apt install python3-opencv` gives
-  the plain Debian build — no CUDA, no GStreamer — while the host has JetPack's
-  4.1.1 with both. Adequate here, since the pipeline uses `imread`, `resize` and
-  `VideoCapture` on a file. Mounting the host build would keep them but would make
-  the container depend on host paths and defeat the point of containerising.
-- **`peak_mem_mb` is host RSS, not GPU memory.** During a run reporting 5115 MB,
-  `nvidia-smi` showed GPU memory flat at 1212 MiB.
+- **Batch size is 1.** The project targets single-stream edge inference on a 2 GB Jetson Nano.
+- **INT8 is not used.** The Nano's Maxwell GPU is SM 5.3 and TensorRT reports no fast INT8 path on this platform.
+- **There are no tensor cores.** Results should not be compared directly with newer Jetson platforms that rely on tensor-core acceleration.
+- **The evaluation path uses fixed square 640×640 preprocessing.** This differs from Ultralytics' default validation preprocessing, so the published model reference and this project's absolute mAP are not identical protocols.
+- **Laptop GPU results are reference-only.** The RTX 3050 Laptop GPU was operating below its nominal clock ceiling under the available vendor power profile.
+- **Sustained runs retain stock thermal management.** The 10 W run reached 50 °C and triggered the stock fan governor; the 5 W run peaked at 44.5 °C without triggering the fan.
+- **JetPack 4.6 pins the software stack.** The Nano uses CUDA 10.2, TensorRT 8.2 and Python 3.6.
+- **Ultralytics does not run in the Nano runtime environment.** Export and reference evaluation stay on the laptop; decoding and NMS on the Nano are implemented in NumPy.
+- **The container and host use different OpenCV builds.** This is the main known difference behind the preprocessing timing gap.
+- **The sustained 10 W and 5 W runs used different clock-lock states.** Their FPS/W values describe the two measured deployment operating points, not a controlled experiment that isolates only the `nvpmodel` setting.
 
 ---
 
 ## Roadmap
 
-Tracked in [`PROJECT_PLAN.md`](PROJECT_PLAN.md).
+**Completed**
+- runtime benchmarking
+- TensorRT FP32 and FP16 deployment
+- full COCO val2017 accuracy evaluation
+- Docker deployment and bare-metal comparison
+- sustained thermal testing
+- 5 W / 10 W operating-point study
 
-**Completed:** runtime benchmarking, TensorRT FP32/FP16 optimisation, full COCO
-accuracy evaluation, Docker deployment and overhead measurement, sustained thermal
-testing, and 5 W vs 10 W power-mode benchmarking.
+**Next**
+- lightweight inference service / detection sink
+- Prometheus/Grafana monitoring
+- systemd watchdog and recovery
+- CI accuracy regression gate
+- v1.0 cleanup and release
 
-**Next:** lightweight inference service, Prometheus/Grafana monitoring with a
-systemd watchdog, CI with an accuracy regression gate, and v1.0 release cleanup.
+**Optional after v1**
+- ROS2 detection publishing
 
-**Optional after v1:** ROS2 detection publishing.
+**Deferred**
+- cross-hardware model comparison
+- object tracking
+- transformer feasibility study on Maxwell
+- on-device temporal action recognition
 
-**Deferred:** cross-hardware model comparison matrix, object tracking, a
-transformer feasibility study on Maxwell, on-device temporal action recognition.
 ---
 
 ## License

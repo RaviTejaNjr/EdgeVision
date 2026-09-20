@@ -1,6 +1,6 @@
 # EdgeVision - Production Edge AI Deployment on NVIDIA Jetson Nano
 
-[![TensorRT](https://img.shields.io/badge/TensorRT-8.2-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/tensorrt) [![Jetson](https://img.shields.io/badge/Jetson%20Nano-2GB-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/embedded/jetson-nano) [![ONNX](https://img.shields.io/badge/ONNX-005CED?style=flat&logo=onnx&logoColor=white)](https://onnx.ai/) [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/) [![PyCUDA](https://img.shields.io/badge/PyCUDA-3776AB?style=flat&logo=python&logoColor=white)](https://documen.tician.de/pycuda/) [![Python](https://img.shields.io/badge/Python-3.6%20%7C%203.10-blue?style=flat&logo=python)](https://www.python.org/)
+[![CI](https://github.com/RaviTejaNjr/EdgeVision/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/RaviTejaNjr/EdgeVision/actions/workflows/ci.yml) [![TensorRT](https://img.shields.io/badge/TensorRT-8.2-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/tensorrt) [![Jetson](https://img.shields.io/badge/Jetson%20Nano-2GB-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/embedded/jetson-nano) [![ONNX](https://img.shields.io/badge/ONNX-005CED?style=flat&logo=onnx&logoColor=white)](https://onnx.ai/) [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/) [![PyCUDA](https://img.shields.io/badge/PyCUDA-3776AB?style=flat&logo=python&logoColor=white)](https://documen.tician.de/pycuda/) [![Python](https://img.shields.io/badge/Python-3.6%20%7C%203.10-blue?style=flat&logo=python)](https://www.python.org/)
 
 EdgeVision takes an object detector from a PyTorch checkpoint to an optimized TensorRT deployment on an **NVIDIA Jetson Nano 2GB**, with latency, accuracy, memory, container overhead and thermal behavior measured along the way.
 
@@ -582,9 +582,7 @@ See [`results/README.md`](results/README.md) for the result schema and run-level
 - JSONL detection sink verified with an independent consumer
 - systemd process supervision, crash recovery and boot auto-start verified on the Nano
 - GitHub Actions CI with Python syntax checks and accuracy regression gate
-
-**Next**
-- v1.0 cleanup and release
+- v1.0 release scope
 
 **Optional after v1**
 - ROS2 detection publishing

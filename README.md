@@ -1,6 +1,6 @@
 # EdgeVision - Production Edge AI Deployment on NVIDIA Jetson Nano
 
-[![CI](https://github.com/RaviTejaNjr/EdgeVision/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/RaviTejaNjr/EdgeVision/actions/workflows/ci.yml) [![TensorRT](https://img.shields.io/badge/TensorRT-8.2-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/tensorrt) [![Jetson](https://img.shields.io/badge/Jetson%20Nano-2GB-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/embedded/jetson-nano) [![ONNX](https://img.shields.io/badge/ONNX-005CED?style=flat&logo=onnx&logoColor=white)](https://onnx.ai/) [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/) [![PyCUDA](https://img.shields.io/badge/PyCUDA-3776AB?style=flat&logo=python&logoColor=white)](https://documen.tician.de/pycuda/) [![Python](https://img.shields.io/badge/Python-3.6%20%7C%203.10-blue?style=flat&logo=python)](https://www.python.org/)
+[![TensorRT](https://img.shields.io/badge/TensorRT-8.2-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/tensorrt) [![Jetson](https://img.shields.io/badge/Jetson%20Nano-2GB-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/embedded/jetson-nano) [![ONNX](https://img.shields.io/badge/ONNX-005CED?style=flat&logo=onnx&logoColor=white)](https://onnx.ai/) [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/) [![PyCUDA](https://img.shields.io/badge/PyCUDA-3776AB?style=flat&logo=python&logoColor=white)](https://documen.tician.de/pycuda/) [![Python](https://img.shields.io/badge/Python-3.6%20%7C%203.10-blue?style=flat&logo=python)](https://www.python.org/) [![CI](https://github.com/RaviTejaNjr/EdgeVision/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/RaviTejaNjr/EdgeVision/actions/workflows/ci.yml)
 
 EdgeVision takes an object detector from a PyTorch checkpoint to an optimized TensorRT deployment on an **NVIDIA Jetson Nano 2GB**, with latency, accuracy, memory, container overhead and thermal behavior measured along the way.
 
@@ -8,7 +8,7 @@ EdgeVision takes an object detector from a PyTorch checkpoint to an optimized Te
 
 *The Jetson Nano 2GB Developer Kit used for every on-device measurement in this project.*
 
-**TensorRT FP16 runs 1.84× faster than TorchScript FP32 on the same board, with an absolute mAP@50-95 change of 0.0001 (~0.03% relative) on the full 5,000-image COCO val2017 set.**
+**TensorRT FP16 runs 1.84× faster than TorchScript FP32 on the same board, with an absolute mAP@50-95 change of 0.00032 (~0.10% relative) on the full 5,000-image COCO val2017 set.**
 
 ![TensorRT FP16 vs TorchScript FP32 on Jetson Nano](assets/demo_comparison.gif)
 
@@ -119,19 +119,19 @@ Full COCO val2017: **5,000 images and 36,781 annotations**, evaluated with `pyco
 
 | Runtime | Precision | mAP@50-95 | mAP@50 | mAP@75 | Detections | Δ mAP@50-95 |
 |---|---|---|---|---|---|---|
-| TorchScript | FP32 | 0.3343 | 0.5005 | 0.3529 | 530,418 | baseline |
-| TensorRT | FP32 | **0.3343** | **0.5005** | **0.3529** | 530,417 | **0.0000** |
-| TensorRT | FP16 | 0.3342 | 0.5003 | 0.3529 | 531,012 | **-0.0001** |
+| TorchScript | FP32 | 0.33432 | 0.50048 | 0.35289 | 530,418 | baseline |
+| TensorRT | FP32 | **0.33432** | **0.50048** | **0.35290** | 530,417 | **0.00000** |
+| TensorRT | FP16 | 0.33400 | 0.50047 | 0.35119 | 531,012 | **-0.00032** |
 
-TorchScript FP32 and TensorRT FP32 match to four decimal places. TensorRT FP16 changes mAP@50-95 by 0.0001 while reducing latency and memory use.
+TorchScript FP32 and TensorRT FP32 match to four decimal places. TensorRT FP16 changes mAP@50-95 by 0.00032 while reducing latency and memory use.
 
 Ultralytics publishes a higher reference figure for `yolov5nu` than this pipeline measures. This project uses its own fixed square 640×640 preprocessing and evaluation path, so the published number and the result above are not identical evaluation protocols. The important comparison here is between runtimes under the same project pipeline.
 
 | Object size | mAP@50-95 (TensorRT FP16) |
 |---|---|
-| small | 0.153 |
-| medium | 0.369 |
-| large | 0.468 |
+| small | 0.15277 |
+| medium | 0.36824 |
+| large | 0.46869 |
 
 ### Sustained operating-point study
 
@@ -542,7 +542,7 @@ See [`results/README.md`](results/README.md) for the result schema and run-level
 - **TensorRT FP16 improved on-device inference from 93.15 ms to 50.64 ms** compared with the TorchScript FP32 baseline, a 1.84× engine-level speedup.
 - **End-to-end throughput improved from 8.21 to 12.60 FPS.** The smaller 1.53× end-to-end gain reflects capture, preprocessing and NMS time outside the inference engine.
 - **TensorRT FP32 was useful as a control.** It matched TorchScript FP32 mAP to four decimal places, which helped verify that the conversion path was behaving as expected before introducing FP16.
-- **FP16 had negligible measured accuracy impact.** mAP@50-95 changed from 0.3343 to 0.3342 on COCO val2017.
+- **FP16 had negligible measured accuracy impact.** mAP@50-95 changed from 0.33432 to 0.33400 on COCO val2017, an absolute drop of 0.00032.
 - **Container overhead was small.** TensorRT inference differed by 0.14%, while the larger 2.48% preprocessing difference was associated with the different OpenCV builds on host and container.
 - **The 10-minute 10 W run remained stable.** Throughput changed from 12.61 FPS in the first minute to 12.49 FPS in the last minute. The thermal governor engaged the fan when the GPU reached 50 °C.
 - **The measured 5 W operating point sustained 8.46 FPS.** Normalized by configured power envelope, it produced 1.692 nominal FPS/W versus 1.249 at the measured 10 W operating point. This is not a direct electrical efficiency measurement.

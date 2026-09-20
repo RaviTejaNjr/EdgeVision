@@ -1506,7 +1506,7 @@ data/coco/
 results/detections_*.json
 ```
 
-⚠️ **Evaluation runs at conf 0.001, not the runtime's 0.25.** mAP is the area under the precision–recall curve; high-recall points come only from low-confidence detections. 0.001 with `max_det=300` is the COCO convention that every published figure uses. *(Detections averaged 106.2 per image, so the cap was never hit.)*
+⚠️ **Evaluation runs at conf 0.001, not the runtime's 0.25.** The low threshold retains low-confidence detections so the evaluator can construct the precision–recall curve across confidence levels. The project runtime may retain up to 300 detections per image, while the standard COCO evaluator applies its own `maxDets` settings during scoring. *(Detections averaged 106.2 per image in this run.)*
 
 ⚠️ **COCO category ids are not 0..79.** The original 91-class set had 11 removed, so ids skip 12, 26, 29, 30, 45, 66, 68, 69, 71, 83, 91. Model index 11 maps to category **13**. A naive `cls + 1` would score every detection against the wrong class and produce a plausible near-zero mAP rather than an error.
 
@@ -1850,8 +1850,281 @@ Thermally, the 10 W operating point reached 50.0 °C and triggered the stock fan
 
 ---
 
-## Next
+## Inference service and structured output
 
-- [ ] **Part 8:** lightweight inference service / structured detection sink
-- [ ] **Part 9:** monitoring, systemd watchdog and resilience
-- [ ] **Part 10:** CI accuracy regression gate, documentation cleanup and v1.0 release
+### 57. JSONL detection sink
+
+`app/run.py` already contained a lightweight detection sink, so Part 8 did not need a new web service or ROS2 layer for v1.
+
+A 20-frame TensorRT FP16 run was used to verify the interface:
+
+```bash
+python3 app/run.py \
+  --runtime tensorrt \
+  --precision fp16 \
+  --frames 20 \
+  --sink /tmp/edgevision_detections.jsonl
+```
+
+The run completed normally and produced exactly 20 JSONL records:
+
+```bash
+wc -l /tmp/edgevision_detections.jsonl
+# -> 20 /tmp/edgevision_detections.jsonl
+```
+
+The first record had this structure:
+
+```json
+{"frame": 1, "timestamp": 1789903653.2286446, "detections": [{"box": [59.0, 223.0, 259.5, 716.0], "score": 0.9199, "class": "person"}]}
+```
+
+A separate Python process then parsed the file successfully:
+
+```text
+frames: 20
+keys: ['detections', 'frame', 'timestamp']
+first frame detections: 7
+first detection: {'box': [59.0, 223.0, 259.5, 716.0], 'score': 0.9199, 'class': 'person'}
+```
+
+This verifies a machine-readable process boundary without introducing Flask, ROS2 or another runtime dependency.
+
+**Part 8 complete.**
+
+---
+
+## Process supervision and recovery
+
+### 58. systemd service
+
+The v1 service unit is stored at:
+
+```text
+systemd/edgevision.service
+```
+
+Unit contents:
+
+```ini
+[Unit]
+Description=EdgeVision TensorRT FP16 Inference Service
+After=network.target
+
+[Service]
+Type=simple
+User=raviteja
+WorkingDirectory=/home/raviteja/EdgeVision
+ExecStart=/usr/bin/python3 -u app/run.py --runtime tensorrt --precision fp16
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
+```
+
+The application already loops a finite video source at EOF, so omitting `--frames` gives the service a long-running process instead of letting the test video end the service.
+
+Install and enable:
+
+```bash
+sudo cp systemd/edgevision.service /etc/systemd/system/edgevision.service
+sudo systemctl daemon-reload
+sudo systemctl enable edgevision.service
+sudo systemctl start edgevision.service
+```
+
+Initial status confirmed that TensorRT FP16 loaded and inference was running under systemd:
+
+```text
+Active: active (running)
+Main PID: 13690 (python3)
+```
+
+Runtime output is captured by journald through the normal service stdout/stderr path.
+
+#### Crash-recovery test
+
+The process was deliberately killed:
+
+```bash
+sudo systemctl kill -s SIGKILL edgevision.service
+```
+
+Before the kill:
+
+```text
+Main PID: 13690
+```
+
+After systemd restarted the service:
+
+```text
+Active: active (running)
+Main PID: 13962
+```
+
+The PID change proves that a new inference process was launched automatically after the forced crash.
+
+#### Boot auto-start test
+
+The Nano was rebooted:
+
+```bash
+sudo reboot
+```
+
+After reconnecting:
+
+```bash
+systemctl status edgevision.service --no-pager
+```
+
+showed:
+
+```text
+Loaded: loaded (...; enabled; ...)
+Active: active (running)
+Main PID: 4629 (python3)
+```
+
+Inference logs continued after boot at roughly 12.2–12.5 FPS during the observed period.
+
+The service file was committed in:
+
+```text
+b2ab2bd  Add systemd supervision for EdgeVision service
+```
+
+**Part 9 complete.**
+
+---
+
+## CI and release
+
+### 59. Accuracy regression gate
+
+The CI regression test is:
+
+```text
+tests/test_accuracy_regression.py
+```
+
+It reads the committed values in `results/accuracy.csv` and compares TensorRT FP16 mAP@50-95 against the TorchScript FP32 reference.
+
+Configured threshold:
+
+```yaml
+evaluation:
+  map_regression_threshold: 0.01
+```
+
+Measured values:
+
+```text
+TorchScript FP32 reference : 0.33432
+TensorRT FP16 candidate    : 0.33400
+absolute drop              : 0.00032
+allowed drop               : 0.01000
+```
+
+Local test:
+
+```bash
+pytest tests/test_accuracy_regression.py -v
+```
+
+Result:
+
+```text
+1 passed
+```
+
+The CI workflow is:
+
+```text
+.github/workflows/ci.yml
+```
+
+It runs on pushes and pull requests to `main` and performs:
+
+```text
+1. repository checkout
+2. Python 3.10 setup
+3. install pytest + PyYAML
+4. python -m compileall app tests
+5. pytest tests/test_accuracy_regression.py -v
+```
+
+The first pushed CI implementation was committed as:
+
+```text
+fea6f22  Add CI accuracy regression gate
+```
+
+GitHub Actions completed successfully for that commit. A later documentation commit, `3bc4901`, was also verified with:
+
+```text
+status     : completed
+conclusion : success
+```
+
+The README now includes the workflow status badge so the current CI state is visible from the repository front page.
+
+---
+
+### 60. v1.0.0 release tag
+
+Before tagging:
+
+```bash
+git status
+# -> nothing to commit, working tree clean
+
+git tag --list
+# -> no existing tags
+```
+
+Create the annotated release tag:
+
+```bash
+git tag -a v1.0.0 -m "EdgeVision v1.0.0"
+```
+
+Push it:
+
+```bash
+git push origin v1.0.0
+```
+
+Result:
+
+```text
+[new tag]         v1.0.0 -> v1.0.0
+```
+
+A separate GitHub Release page is optional; the pushed annotated Git tag is the versioned release marker used by the repository.
+
+**Part 10 complete.**
+
+---
+
+## v1.0.0 status
+
+The trimmed v1 release now includes:
+
+- TensorRT FP32 and FP16 deployment on Jetson Nano 2GB
+- TorchScript FP32 baseline
+- repeatable latency, FPS and memory benchmarking
+- full COCO val2017 accuracy evaluation
+- bare-metal versus Docker comparison
+- sustained 10 W and 5 W operating-point measurements
+- JSONL detection output with an independently verified consumer
+- systemd boot auto-start and crash recovery
+- GitHub Actions syntax checks and accuracy regression gate
+- annotated `v1.0.0` Git tag
+
+Optional work remains outside v1, including ROS2 publishing, Prometheus/Grafana monitoring, broader hardware comparison, tracking and transformer experiments.
+
+**EdgeVision v1.0.0 complete.**

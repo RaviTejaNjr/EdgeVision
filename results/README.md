@@ -56,7 +56,7 @@ For example, one laptop run reported 5115 MB RSS while `nvidia-smi` showed about
 
 ## Jetson runtime comparison
 
-Headline Jetson benchmarks were run at 10 W (`nvpmodel -m 0`) with clocks locked using `jetson_clocks`, fan off, batch size 1 and 640x640 input. Each configuration was repeated three times.
+Headline Jetson benchmarks were run at 10 W (`nvpmodel -m 0`) with clocks locked using `jetson_clocks`, batch size 1 and 640x640 input. The fan started at PWM 0 and the stock thermal governor remained active. Each configuration was repeated three times.
 
 | Runtime | Precision | Inference | End-to-end FPS | Peak RSS |
 |---|---|---:|---:|---:|
@@ -97,9 +97,11 @@ The detection export does not apply an extra project-specific per-image cap befo
 |---|---|---:|---:|---:|---:|
 | TorchScript | FP32 | 0.3343 | 0.5005 | 0.3529 | 530,418 |
 | TensorRT | FP32 | 0.3343 | 0.5005 | 0.3529 | 530,417 |
-| TensorRT | FP16 | 0.3342 | 0.5003 | 0.3529 | 531,012 |
+| TensorRT | FP16 | 0.3340 | 0.5005 | 0.3512 | 531,012 |
 
-TorchScript FP32 and TensorRT FP32 match to four decimal places. TensorRT FP16 is 0.0001 lower on mAP@50-95 in this evaluation.
+TorchScript FP32 and TensorRT FP32 match to four decimal places. The committed `accuracy.csv` records TensorRT FP16 at 0.33400 mAP@50-95 versus the 0.33432 TorchScript FP32 reference, an absolute drop of 0.00032.
+
+The CI regression gate reads these committed values and allows at most a 0.01 absolute mAP@50-95 drop, as configured in `configs/params.yaml`.
 
 ### Regenerating COCO results
 
@@ -149,7 +151,7 @@ Measured differences:
 - preprocessing: +2.48%
 - peak RSS: +44 MB
 
-The container had very little effect on TensorRT inference time. Most of the small end-to-end difference came from preprocessing.
+The container had very little effect on TensorRT inference time. Preprocessing showed the largest measured component-level difference (+2.48%), while end-to-end throughput changed by -0.66%.
 
 ## Sustained thermal and power-mode runs
 

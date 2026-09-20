@@ -2,28 +2,28 @@ model:
   name: yolov5nu
   weights: models/yolov5nu.pt
   onnx: models/yolov5nu.onnx
+  torchscript: models/yolov5nu.torchscript
+  engine_fp32: models/yolov5nu_fp32.engine
+  engine_fp16: models/yolov5nu_fp16.engine
   input_res: 640
   opset: 13
-  engine_fp16: models/yolov5nu_fp16.engine
-  engine_fp32: models/yolov5nu_fp32.engine
-  torchscript: models/yolov5nu.torchscript
 
 engine:
   precision: fp16          # fp32 | fp16
-  workspace_mb: 256        # keep low — 2GB board
+  workspace_mb: 256        # used for the current Nano engine builds
 
 runtime:
   source: data/test_video.mp4
-  conf_threshold: 0.25
+  conf_threshold: 0.25     # deployment threshold; COCO evaluation uses 0.001
   nms_iou: 0.45
 
 benchmark:
   warmup_frames: 50
-  duration_s: 600
+  duration_s: 600          # sustained/thermal runs; short runs can override by frame count
   power_mode: 10W          # 10W | 5W
-  clocks_locked: true
-  fan: true
+  clocks_locked: true      # headline short-run protocol uses jetson_clocks
+  fan: auto                # leave the stock thermal governor active
 
 evaluation:
-  coco_val_images: 500
-  map_regression_threshold: 0.01   # CI fails beyond this drop
+  coco_val_images: 5000    # full COCO val2017
+  map_regression_threshold: 0.01   # absolute mAP@50-95 drop allowed by the future CI gate

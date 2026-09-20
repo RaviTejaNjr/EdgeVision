@@ -1,17 +1,21 @@
-# Environments
+# Python environments and caches
 venv/
 env/
+.venv/
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 .env
 
-# Model artifacts — regenerable; the engine is hardware-specific
+# Model artifacts — generated locally / target-specific
 *.pt
 *.onnx
 *.engine
 *.torchscript
 
-# Test data
+# Local datasets and generated media
 data/*.mp4
 data/*.avi
 data/coco/
@@ -19,20 +23,15 @@ assets/demo_tensorrt_*.mp4
 assets/demo_torchscript_*.mp4
 results/detections_*.json
 
-# Editor
-.vscode/
-.idea/
-TODO.md
-GIT_NOTES.md
-docs/GIT_NOTES.md
-UNDERSTANDING.md
-docs/UNDERSTANDING.md
+# Private working docs
 PROJECT_PLAN.md
 NOTES.md
+TODO.md
 
-# OS
+# Editor / OS files
+.vscode/
+.idea/
 Thumbs.db
 .DS_Store
 
-# NOTE: results/ is deliberately NOT ignored.
-# The CSVs are a deliverable — see README.
+# Benchmark CSVs, plots and selected reports are project deliverables.

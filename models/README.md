@@ -1,15 +1,10 @@
 # Models
 
-Model choice, export settings, and the reasoning behind both.
+Model choice, export settings, artifact checks and TensorRT engine build notes.
 
-## Which model, and what it actually is
+## Model
 
-**`yolov5nu`** — Ultralytics' retrofit of the YOLOv5 backbone with an
-**anchor-free, decoupled detection head** taken from YOLOv8. The `u` suffix is
-the marker.
-
-**It is not the original 2020 YOLOv5.** Worth stating plainly, because the
-difference changes how the output is decoded.
+The project uses **`yolov5nu`**, Ultralytics' retrofit of the YOLOv5 backbone with an **anchor-free, decoupled detection head**. This is not the original 2020 YOLOv5 detection head, and the difference matters when decoding the exported output.
 
 | Property | Value |
 |---|---|
@@ -23,31 +18,23 @@ difference changes how the output is decoded.
 | Published mAP@50-95 | 0.343 (Ultralytics) |
 | Measured here | **0.3343** — see `results/README.md` |
 
-### Why not YOLOv8n
+### Why `yolov5nu`
 
-Not a performance judgement — a platform constraint.
+`yolov5nu` is used throughout the project so the same model can be compared across the PyTorch, TorchScript, ONNX and TensorRT paths.
 
-**Ultralytics requires Python 3.8+. TensorRT's bindings on JetPack 4.6 are built
-for the system Python 3.6 only.** Installing Python 3.8 to get Ultralytics leaves
-`No module named tensorrt`, and often `Illegal instruction (core dumped)` on torch
-import.
+Ultralytics is used on the development machine for checkpoint loading, export and reference validation. The Jetson Nano remains on the JetPack 4.6 system Python 3.6 environment because its TensorRT bindings are provided there. The on-device path therefore uses exported artifacts and does not depend on Ultralytics.
 
-TensorRT is the point of the project, so the Nano stays on 3.6 and Ultralytics
-never touches it. YOLOv5 runs there under 3.6 with NVIDIA's torch wheel.
-
-*(The `yolov5nu` checkpoint is still fetched **on the laptop** via Ultralytics —
-only the on-device path is constrained.)*
+TorchScript provides the on-device PyTorch baseline, while TensorRT is the deployment runtime.
 
 ---
 
-## The output tensor: `(1, 84, 8400)`
+## Output tensor: `(1, 84, 8400)`
 
-The single most important thing to understand here, because `app/postprocess.py`
-decodes it by hand.
+`app/postprocess.py` decodes the exported model output directly, so the tensor layout needs to be handled correctly.
 
 ### Where 8400 comes from
 
-Predictions at three scales, with strides 8, 16 and 32:
+Predictions are produced at three scales with strides 8, 16 and 32:
 
 | Stride | Grid | Cells |
 |---|---|---|
@@ -56,44 +43,35 @@ Predictions at three scales, with strides 8, 16 and 32:
 | 32 | 20 × 20 | 400 |
 | | **Total** | **8400** |
 
-Each cell is one candidate detection. Three scales so small objects are caught by
-the fine grid and large ones by the coarse.
+Each grid cell contributes one candidate detection.
 
 ### Where 84 comes from
 
-```
+```text
 84 = 4 box values + 80 COCO class scores
 ```
 
-**There is no objectness column.** Classic YOLOv5 output was `5 + num_classes` —
-4 box values, 1 objectness, then classes. The anchor-free head **drops objectness
-entirely** and uses the maximum class score as confidence.
+There is **no objectness column** in this exported head. The older YOLOv5 layout used `5 + num_classes`: four box values, one objectness value and the class scores. Treating this output as that older layout would offset the class-score columns and produce incorrect detections.
 
-Assuming the old layout shifts all 80 class scores by one position. The result
-still produces detections, so it fails silently. `tests/test_parity.py` asserts
-the 80 class columns lie in [0, 1] — which they would not if the layout were
-offset, since the last column would then hold unbounded box data.
+`tests/test_parity.py` checks that the 80 class-score columns remain in the expected range.
 
-### Layout and format
+### Layout and box format
 
-**Channel-first:** 84 rows of 8400 values, not 8400 rows of 84. Transpose before
-iterating.
+The tensor is **channel-first**: 84 rows of 8400 values, not 8400 rows of 84. It is transposed before candidate detections are processed.
 
-**Box format is `(cx, cy, w, h)`** — centre, not corners — in pixels relative to
-the 640×640 letterboxed input. Converting to `x1,y1,x2,y2` and undoing the
-letterbox is `app/postprocess.py`'s job.
+Boxes are represented as `(cx, cy, w, h)` in pixels relative to the 640×640 letterboxed input. `app/postprocess.py` converts them to corner coordinates and maps them back to the original image.
 
-### The DFL layers in the build log
+### DFL layers in the exported graph
 
-`trtexec` output shows `/model.24/dfl/Reshape`, `/dfl/Softmax`, `/dfl/conv/Conv`.
+The TensorRT build log contains layers such as:
 
-That is **Distribution Focal Loss** decoding: instead of regressing a box edge as
-a single number, the model predicts a probability distribution over 16 discrete
-bins per edge and takes the expected value. Better gradients during training,
-sub-pixel accuracy at inference.
+```text
+/model.24/dfl/Reshape
+/model.24/dfl/Softmax
+/model.24/dfl/conv/Conv
+```
 
-**It happens inside the exported graph.** The `(1, 84, 8400)` output is already
-decoded — there is nothing to implement.
+These are part of Distribution Focal Loss decoding. The DFL computation is already included in the exported graph, so the `(1, 84, 8400)` tensor reaching the application does not require a separate DFL implementation.
 
 ---
 
@@ -105,11 +83,13 @@ decoded — there is nothing to implement.
 model.export(format="onnx", opset=13, imgsz=640, simplify=True, dynamic=False)
 ```
 
-| Argument | Why |
+| Argument | Reason |
 |---|---|
-| `opset=13` | TensorRT 8.2 supports roughly opset 13–14. A newer opset exports cleanly on the laptop and then **fails at engine build** — a failure one step removed from its cause |
-| `dynamic=False` | Fixed 640×640. Dynamic shapes require TensorRT optimisation profiles and complicate everything for no benefit when the input size is known |
-| `simplify=True` | onnxslim constant-folds and removes redundant nodes |
+| `opset=13` | Compatible with the TensorRT 8.2 toolchain used on the Nano |
+| `dynamic=False` | Keeps the input fixed at 640×640 and avoids TensorRT optimization profiles |
+| `simplify=True` | Simplifies the exported ONNX graph |
+
+The exported ONNX model is checked before transfer to the Nano.
 
 ### `export_torchscript.py`
 
@@ -117,27 +97,25 @@ model.export(format="onnx", opset=13, imgsz=640, simplify=True, dynamic=False)
 model.export(format="torchscript", imgsz=640)
 ```
 
-**Uses Ultralytics' own exporter rather than a manual `torch.jit.trace`.** Two
-manual attempts failed:
+Ultralytics' exporter is used instead of a manual `torch.jit.trace`.
 
-1. `RuntimeError: Tracer cannot infer type of (tensor, {'boxes':..., 'feats':[...]})`
-   — the model returns a dict of mixed tensors and lists that the tracer cannot
-   type.
-2. After wrapping to return only the prediction tensor:
-   `ERROR: Tensor-valued Constant nodes differed in value across invocations`
-   — **Ultralytics caches anchor points after the first forward pass**, so the two
-   trace runs produce different graphs.
+Two direct tracing attempts were tested first:
 
-Ultralytics warms the model before tracing, so the anchor cache is populated and
-both invocations match.
+1. The unwrapped model returned mixed tensor/list/dictionary outputs and failed with:
 
-**Lesson: when a library ships its own exporter, use it — it knows about internal
-state you do not.**
+```text
+RuntimeError: Tracer cannot infer type of (tensor, {'boxes':..., 'feats':[...]})
+```
 
-TorchScript exists because it is the **only PyTorch path available on the Nano**.
-`torch.jit.load` needs nothing but torch — no Ultralytics, and as it turns out no
-torchvision either, since YOLOv5n is pure convolutions with no torchvision
-operators in the graph.
+2. A wrapper that returned only the prediction tensor then failed with:
+
+```text
+ERROR: Tensor-valued Constant nodes differed in value across invocations
+```
+
+The model caches anchor information after the first forward pass, so the repeated trace invocations did not produce the same graph. Ultralytics' exporter handles that model state before tracing.
+
+TorchScript is used as the on-device PyTorch baseline because `torch.jit.load` only needs PyTorch at runtime. The exported graph used here does not require torchvision operators.
 
 ### `build_trt_engine.py`
 
@@ -146,52 +124,39 @@ python3 models/build_trt_engine.py --precision fp16
 python3 models/build_trt_engine.py --precision fp32
 ```
 
-**Must run on the Jetson.** TensorRT auto-tunes by timing candidate kernels on the
-actual GPU, so the engine embeds choices specific to that architecture and
-TensorRT version. An engine built elsewhere will not deserialise.
+TensorRT engines are built on the Jetson Nano. The builder benchmarks candidate kernels on the target GPU, so the generated engine depends on the target architecture and TensorRT environment.
 
-It prints the platform capability flags:
+The build script records the platform capability flags:
 
-```
+```text
 platform_has_fast_fp16 : True
 platform_has_fast_int8 : False
 ```
 
-**That second line is TensorRT's own API declaring INT8 unavailable** — the board
-is SM 5.3 and the INT8 path needs compute capability 6.1 for the DP4A
-instruction. A stronger citation than documentation, and reproducible by anyone
-with the hardware.
+TensorRT therefore reports a fast FP16 path but no fast INT8 path on this Nano.
 
 | Precision | Build time | Engine size |
 |---|---|---|
 | FP32 | 151.0 s | 22.9 MB |
 | FP16 | 362.6 s | 11.8 MB |
 
-**FP16 takes 2.4× longer to build** — the auto-tuner has both precisions available
-per layer, so a larger search space. The engine is half the size because FP32
-weights are 4 bytes and FP16 are 2.
+The FP16 engine takes longer to build because TensorRT has a larger set of candidate tactics to evaluate. Its engine file is smaller because the weights use FP16 rather than FP32 storage.
 
-⚠️ **Engines are not a pure function of the ONNX input.** Rebuilding on an idle
-headless board produced an engine **2.2% faster** than the same conversion run
-during initial setup (50.64 vs 51.76 ms — five times the run-to-run CV). With more
-free memory the auto-tuner can consider tactics it would otherwise skip; the build
-log warns about exactly this: *"Some tactics do not have sufficient workspace
-memory to run."*
+Engine build conditions can also affect the selected TensorRT tactics. Rebuilding the same ONNX model on an idle headless board produced a 50.64 ms result compared with 51.76 ms from the earlier build. The builder log also reported cases where candidate tactics could not run because of workspace limits.
 
-### `check_onnx.py`, `check_torchscript.py`
+### `check_onnx.py` and `check_torchscript.py`
 
-Verify the artifacts **before** transferring them to the Nano — cheaper than
-discovering a problem after an 11-minute engine build on the board.
+These scripts verify the exported artifacts before they are copied to the Nano.
 
-`check_onnx.py` confirms opset 13 and that shapes are fixed rather than dynamic.
-`check_torchscript.py` loads the file **importing only torch**, which is exactly
-the situation on the Nano.
+`check_onnx.py` confirms the ONNX opset and fixed input shapes.
+
+`check_torchscript.py` loads the exported file while importing only PyTorch, matching the intended Nano runtime environment.
 
 ---
 
 ## Artifacts
 
-All gitignored — regenerable, and the engines are useless on any other machine.
+Model artifacts are gitignored because they can be regenerated, and TensorRT engines are tied to the target GPU and TensorRT environment.
 
 | File | Regenerate with | Time |
 |---|---|---|
@@ -201,8 +166,7 @@ All gitignored — regenerable, and the engines are useless on any other machine
 | `yolov5nu_fp32.engine` | `build_trt_engine.py --precision fp32` | 151 s, **on the Nano** |
 | `yolov5nu_fp16.engine` | `build_trt_engine.py --precision fp16` | 363 s, **on the Nano** |
 
-**The engines in particular must not be committed.** They only load on a Maxwell
-GPU with TensorRT 8.2 — 12–23 MB of binary that is useless to anyone else.
+The TensorRT engine files are not committed to the repository.
 
 ---
 
@@ -216,5 +180,4 @@ GPU with TensorRT 8.2 — 12–23 MB of binary that is useless to anyone else.
 | | JetPack OpenCV 4.1.1 |
 | | NumPy 1.13.3 |
 
-The split is forced by the Python 3.6 constraint, not chosen — but it happens to
-match how deployment works in practice: export on a workstation, run on the device.
+Export and reference evaluation stay on the development machine. The Jetson receives the exported artifacts and runs the deployment path with the versions supplied by JetPack 4.6.

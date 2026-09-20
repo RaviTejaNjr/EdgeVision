@@ -204,7 +204,7 @@ video file / IMX219 camera
         ▼
   downstream consumer
 
-  systemd supervision is the next v1 deployment step
+  systemd supervision wraps the process (boot auto-start and restart recovery verified)
 ```
 
 | Laptop (Python 3.10) | Jetson Nano (Python 3.6) |
@@ -283,7 +283,7 @@ edgevision/
 | **NumPy** | Box decoding and NMS |
 | **Ultralytics** | Laptop-side export and decoder reference |
 | **Docker** | `l4t-base` deployment container |
-| **systemd** | Next v1 step: process supervision and automatic restart |
+| **systemd** | Process supervision, boot auto-start and automatic restart |
 | **jetson-stats (`jtop`)** | Thermal, power and utilization monitoring |
 | **ffmpeg** | Test video normalization and demo composition |
 | **ROS2** | Optional detection-publishing extension after v1 |
@@ -451,6 +451,25 @@ Each line is an independent JSON object:
 
 A separate Python process was used to parse the generated file, confirming that detections leave the inference process in a machine-readable format.
 
+### systemd service
+
+The deployment service is stored at `systemd/edgevision.service`. It runs the TensorRT FP16 inference process continuously, starts automatically at boot and restarts after an unexpected process exit.
+
+```bash
+sudo cp systemd/edgevision.service /etc/systemd/system/edgevision.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now edgevision.service
+```
+
+Service state and runtime logs are available through systemd/journald:
+
+```bash
+systemctl status edgevision.service --no-pager
+journalctl -u edgevision.service
+```
+
+The service was verified on the Nano by force-killing the inference process and confirming that systemd launched a new process, then rebooting the board and confirming that EdgeVision started automatically.
+
 ### Containerized run
 
 The Jetson image is built on-device because it targets arm64 and PyCUDA compiles against the Jetson CUDA environment.
@@ -521,6 +540,7 @@ See [`results/README.md`](results/README.md) for the result schema and run-level
 - **Benchmark methodology mattered.** An early Docker comparison used different measurement paths for host and container. Re-running both through the same harness changed the conclusion, so later comparisons use one benchmark path.
 - **TensorRT engine build conditions mattered.** Rebuilding the same model on a less-loaded board produced a measurable performance difference, so engine-build conditions are recorded with the results.
 - **The inference path exposes consumable output.** `app/run.py --sink` writes one JSONL record per frame; a separate consumer successfully parsed a 20-frame TensorRT FP16 run.
+- **Process supervision was verified on-device.** The systemd unit restarted EdgeVision after a forced `SIGKILL`, and the enabled service started automatically after a Nano reboot. Runtime output is captured by journald.
 
 ---
 
@@ -549,9 +569,9 @@ See [`results/README.md`](results/README.md) for the result schema and run-level
 - sustained thermal testing
 - 5 W / 10 W operating-point study
 - JSONL detection sink verified with an independent consumer
+- systemd process supervision, crash recovery and boot auto-start verified on the Nano
 
 **Next**
-- systemd process supervision and crash recovery
 - CI accuracy regression gate
 - v1.0 cleanup and release
 

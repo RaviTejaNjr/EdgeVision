@@ -1,7 +1,6 @@
 # EdgeVision — Setup Command Reference
 
-Every command run during setup, what it does, and what happened. Kept as a
-reference so any step can be repeated or explained later.
+Every command run during setup, what it does, and what happened. Kept as a reference so any step can be repeated or explained later.
 
 Two machines are involved and they are **not** interchangeable:
 
@@ -16,7 +15,7 @@ Two machines are involved and they are **not** interchangeable:
 
 ---
 
-## Part 0.5 — Jetson Nano: prove the TensorRT path exists
+## Initial Jetson setup
 
 ### 1. Confirm TensorRT Python bindings
 
@@ -24,9 +23,7 @@ Two machines are involved and they are **not** interchangeable:
 python3 -c "import tensorrt; print(tensorrt.__version__)"
 ```
 
-Imports the TensorRT Python module and prints its version. This is the single
-most important check in the whole setup — if TensorRT is not importable from the
-system Python, the project has no path forward on this board.
+Imports the TensorRT Python module and prints its version. This confirms that JetPack's TensorRT Python bindings are available from the system Python.
 
 **Output:** `8.2.1.8` ✅
 
@@ -38,9 +35,7 @@ system Python, the project has no path forward on this board.
 ls -lh /usr/src/tensorrt/bin/trtexec
 ```
 
-`trtexec` is NVIDIA's command-line tool for converting ONNX models into TensorRT
-engines and benchmarking them. It ships with JetPack rather than pip. `-l` shows
-permissions (need the `x` execute bits), `-h` shows a human-readable size.
+`trtexec` is NVIDIA's command-line tool for converting ONNX models into TensorRT engines and benchmarking them. It ships with JetPack rather than pip. `-l` shows permissions (need the `x` execute bits), `-h` shows a human-readable size.
 
 **Output:** `-rwxr-xr-x 1 root root 390K Nov 17 2021 /usr/src/tensorrt/bin/trtexec` ✅
 
@@ -53,9 +48,7 @@ export PATH=/usr/local/cuda/bin:$PATH
 export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 ```
 
-`PATH` tells the shell where to find executables — this adds the CUDA toolkit's
-`bin` so `nvcc` (the CUDA compiler) can be found. `LD_LIBRARY_PATH` does the same
-for shared libraries at runtime.
+`PATH` tells the shell where to find executables — this adds the CUDA toolkit's `bin` so `nvcc` (the CUDA compiler) can be found. `LD_LIBRARY_PATH` does the same for shared libraries at runtime.
 
 **Both print nothing. Silence means success.**
 
@@ -86,13 +79,11 @@ nvcc --version
 sudo apt-get install -y python3-dev
 ```
 
-Provides the C header files (`Python.h` and friends) that any package compiling
-a C extension needs — PyCUDA among them. `-y` auto-confirms prompts.
+Provides the C header files (`Python.h` and friends) that any package compiling a C extension needs — PyCUDA among them. `-y` auto-confirms prompts.
 
 **Output:** completed with `Processing triggers for ...` lines ✅
 
-*Note: the password prompt shows nothing as you type. Not even asterisks. That is
-normal Linux behaviour.*
+*Note: the password prompt shows nothing as you type. Not even asterisks. That is normal Linux behaviour.*
 
 ---
 
@@ -102,8 +93,7 @@ normal Linux behaviour.*
 sudo dpkg --configure -a
 ```
 
-Finishes configuring any package left half-installed when apt was interrupted.
-Safe to run even when nothing is broken — it simply prints nothing.
+Finishes configuring any package left half-installed when apt was interrupted. Safe to run even when nothing is broken — it simply prints nothing.
 
 **Output:** nothing ✅ (no packages were left half-configured)
 
@@ -134,15 +124,11 @@ ping -c 3 pypi.org     # hostname: does name resolution give a usable address?
 pypi.org  →  PING pypi.org(2a04:4e42:400::223)       ❌ 100% packet loss
 ```
 
-DNS worked fine. The problem was the *kind* of address it returned:
-`2a04:4e42:400::223` is **IPv6**. Windows Internet Connection Sharing only routes
-IPv4, so every IPv6 attempt went nowhere and hung until timeout. `8.8.8.8`
-worked because it is an IPv4 literal that never needed resolving.
+DNS worked fine. The problem was the *kind* of address it returned: `2a04:4e42:400::223` is **IPv6**. Windows Internet Connection Sharing only routes IPv4, so every IPv6 attempt went nowhere and hung until timeout. `8.8.8.8` worked because it is an IPv4 literal that never needed resolving.
 
 ### Root cause
 
-The Nano prefers IPv6 addresses when resolving hostnames, but has no working
-IPv6 route over the ICS link.
+The Nano prefers IPv6 addresses when resolving hostnames, but has no working IPv6 route over the ICS link.
 
 ### Fix
 
@@ -158,8 +144,7 @@ precedence ::ffff:0:0/96  100
 
 Save with `Ctrl+O`, `Enter`, exit with `Ctrl+X`.
 
-This raises the priority of IPv4-mapped addresses in the system's address
-selection policy, so IPv4 is tried first.
+This raises the priority of IPv4-mapped addresses in the system's address selection policy, so IPv4 is tried first.
 
 ### Verification
 
@@ -169,12 +154,9 @@ ping -c 3 pypi.org
 
 **Output:** `PING pypi.org (151.101.0.223)` — 0% packet loss ✅
 
-### Why this matters
+### Diagnosis note
 
-The failure presented as an unreliable network and could easily have been blamed
-on the cable, the ICS setup, or the used board — costing hours across several
-sessions. The two-ping split (IP literal vs hostname) is the diagnostic that
-distinguishes "no route" from "wrong address family".
+The IP-literal ping worked while the hostname resolved to an unreachable IPv6 address. That split distinguished a routing/address-family problem from a failed Ethernet link.
 
 ---
 
@@ -186,8 +168,7 @@ sudo pip3 --version
 
 **Output:** `pip 9.0.1 from /usr/lib/python3/dist-packages (python 3.6)`
 
-Stock version, quite old. Works, but fails in confusing ways on packages that
-compile.
+Stock version, quite old. Works, but fails in confusing ways on packages that compile.
 
 *Note: an earlier "command not found" was a typo, not a missing pip.*
 
@@ -199,14 +180,12 @@ compile.
 sudo -H pip3 install --upgrade "pip<21.0" setuptools wheel
 ```
 
-- `-H` sets `HOME` to root's home, avoiding cache-permission warnings about
-  `/home/raviteja/.cache/pip`
+- `-H` sets `HOME` to root's home, avoiding cache-permission warnings about `/home/raviteja/.cache/pip`
 - **`"pip<21.0"` is not optional.** pip 21 dropped Python 3.6 support entirely.
 
 **Output:** `Successfully installed pip-20.3.4 setuptools-59.6.0 wheel-0.37.1` ✅
 
-The `Not uninstalling ... outside environment /usr` messages are normal — new
-versions installed alongside system packages rather than replacing them.
+The `Not uninstalling ... outside environment /usr` messages are normal — new versions installed alongside system packages rather than replacing them.
 
 ---
 
@@ -227,13 +206,9 @@ ERROR: Failed building wheel for numpy
 
 ### Root cause
 
-PyCUDA's build metadata declares `numpy==1.12.1` for Python 3.6. pip obeys this
-literally: it creates an **isolated build environment** and tries to compile that
-exact 2017 numpy from source, ignoring the perfectly good numpy already
-installed.
+PyCUDA's build metadata declares `numpy==1.12.1` for Python 3.6. pip obeys this literally: it creates an **isolated build environment** and tries to compile that exact 2017 numpy from source, ignoring the perfectly good numpy already installed.
 
-numpy 1.12.1 includes `<xlocale.h>`, a header removed from glibc years ago. It
-**cannot** succeed. Retrying is pointless.
+numpy 1.12.1 includes `<xlocale.h>`, a header removed from newer glibc versions. Repeating the same isolated build will fail for the same reason.
 
 ### Fix, in three parts
 
@@ -247,8 +222,7 @@ python3 -c "import numpy; print(numpy.__version__)"
 
 **b) Do not use sudo**
 
-`sudo` resets `PATH`, so the build would not find `nvcc`. Install to the user
-directory instead:
+`sudo` resets `PATH`, so the build would not find `nvcc`. Install to the user directory instead:
 
 ```bash
 export PATH=/usr/local/cuda/bin:$PATH
@@ -291,13 +265,11 @@ Successfully installed appdirs-1.4.4 dataclasses-0.8 platformdirs-2.4.0
 python3 -c "import pycuda.driver as d; d.init(); print(d.Device(0).name())"
 ```
 
-More than an import check — this initialises the CUDA driver and asks the GPU to
-identify itself.
+More than an import check — this initialises the CUDA driver and asks the GPU to identify itself.
 
 **Output:** `NVIDIA Tegra X1` ✅
 
-Both halves of the inference stack are now confirmed: **TensorRT** for the
-engine, **PyCUDA** for moving data to and from the GPU.
+Both halves of the inference stack are now confirmed: **TensorRT** for the engine, **PyCUDA** for moving data to and from the GPU.
 
 ---
 
@@ -305,27 +277,18 @@ engine, **PyCUDA** for moving data to and from the GPU.
 
 Deliberate, not an oversight.
 
-- **TensorRT's Python bindings are a system package**, installed by JetPack at
-  `/usr/lib/python3.6/dist-packages/tensorrt/`. A fresh venv cannot see it, so
-  `import tensorrt` would fail — and TensorRT is the entire point of the project.
-- **JetPack's OpenCV 4.1.1** is built with CUDA and GStreamer support. Inside a
-  venv you would lose it and end up pip-installing a CPU-only build that shadows
-  the good one.
+- **TensorRT's Python bindings are a system package**, installed by JetPack at `/usr/lib/python3.6/dist-packages/tensorrt/`. A fresh venv cannot see it, so `import tensorrt` would fail — and TensorRT is the entire point of the project.
+- **JetPack's OpenCV 4.1.1** is built with CUDA and GStreamer support. Inside a venv you would lose it and end up pip-installing a CPU-only build that shadows the good one.
 
-`pip3 install --user` provides the isolation instead: packages go to
-`~/.local/lib/python3.6/site-packages/`, system packages stay clean, and the
-whole lot can be wiped with `rm -rf ~/.local/lib/python3.6`.
+`pip3 install --user` provides the isolation instead: packages go to `~/.local/lib/python3.6/site-packages/`, system packages stay clean, and the whole lot can be wiped with `rm -rf ~/.local/lib/python3.6`.
 
-If a venv were ever needed: `python3 -m venv --system-site-packages venv` would
-work, but adds confusion for no gain on a single-project board.
+If a venv were ever needed: `python3 -m venv --system-site-packages venv` would work, but adds confusion for no gain on a single-project board.
 
-**Proper isolation comes at Part 6** — a Docker container built on `l4t-base`.
-That is the real answer to reproducibility here, and why containerisation is in
-the plan rather than being optional polish.
+Container isolation is added later with an `l4t-base` image. That keeps the system JetPack packages available while making the application dependencies explicit.
 
 ---
 
-## Part 1 — Laptop: development environment
+## Laptop development environment
 
 ### 10. Create the project folder
 
@@ -342,18 +305,12 @@ conda create -p venv python=3.10 -y
 conda activate venv/
 ```
 
-`-p` (short for `--prefix`) creates the environment **inside the project folder**
-rather than in conda's central store, so deleting the project removes the
-environment with it.
+`-p` (short for `--prefix`) creates the environment **inside the project folder** rather than in conda's central store, so deleting the project removes the environment with it.
 
 Two syntax notes:
 
-- **`python=3.10`, single equals.** Conda's `==` means *exactly* that string, and
-  no build is literally "3.10" (they are 3.10.13, 3.10.14, …). The `==` habit
-  comes from pip.
-- **`conda activate venv/` needs the slash.** Without it, conda looks for a
-  *named* environment called "venv" and fails. Anything with a path separator is
-  treated as a path: `venv/`, `./venv`, `.\venv` all work.
+- **`python=3.10`, single equals.** Conda's `==` means *exactly* that string, and no build is literally "3.10" (they are 3.10.13, 3.10.14, …). The `==` habit comes from pip.
+- **`conda activate venv/` needs the slash.** Without it, conda looks for a *named* environment called "venv" and fails. Anything with a path separator is treated as a path: `venv/`, `./venv`, `.\venv` all work.
 
 Optional prompt tidy-up (the full path is ugly by default):
 
@@ -380,9 +337,7 @@ scripts is disabled on this system.
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 ```
 
-Confirm with `Y`. Affects your user only, not the system. `RemoteSigned` allows
-locally-created scripts while still requiring signatures on downloaded ones —
-Microsoft's own recommended setting for development.
+Confirm with `Y`. Affects your user only, not the system. `RemoteSigned` allows locally-created scripts while still requiring signatures on downloaded ones — Microsoft's own recommended setting for development.
 
 *(Not needed if using Anaconda Prompt rather than PowerShell.)*
 
@@ -394,13 +349,9 @@ Microsoft's own recommended setting for development.
 pip install ultralytics
 ```
 
-`pip` not `conda` — Ultralytics is not in the main conda channels, and
-conda-forge lags. General rule inside a conda env: conda for what conda packages
-well (Python, numpy, scipy, CUDA toolkits), pip for everything else. Mixing is
-fine; installing the *same* package with both is not.
+`pip` not `conda` — Ultralytics is not in the main conda channels, and conda-forge lags. General rule inside a conda env: conda for what conda packages well (Python, numpy, scipy, CUDA toolkits), pip for everything else. Mixing is fine; installing the *same* package with both is not.
 
-**Output:** `Successfully installed ... torch-2.13.0 ultralytics-8.4.137
-torchvision-0.28.0 ...` ✅
+**Output:** `Successfully installed ... torch-2.13.0 ultralytics-8.4.137 torchvision-0.28.0 ...` ✅
 
 ---
 
@@ -428,15 +379,11 @@ pip uninstall torch torchvision -y
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ```
 
-`cu121` is built against CUDA 12.1 and runs fine on a 12.2 driver — CUDA minor
-versions are forward-compatible. ~2.4 GB, since the CUDA libraries are bundled.
+`cu121` is built against CUDA 12.1 and runs fine on a 12.2 driver — CUDA minor versions are forward-compatible. ~2.4 GB, since the CUDA libraries are bundled.
 
-**Output:** `Successfully installed sympy-1.13.1 torch-2.5.1+cu121
-torchvision-0.20.1+cu121` ✅
+**Output:** `Successfully installed sympy-1.13.1 torch-2.5.1+cu121 torchvision-0.20.1+cu121` ✅
 
-Note the torch version went **down**, 2.13.0 → 2.5.1. The cu121 index does not
-carry the newest releases. Not a problem — 2.5.1 is well within Ultralytics'
-supported range. The `+cu121` suffix is the confirmation it is the CUDA build.
+Note the torch version went **down**, 2.13.0 → 2.5.1. The cu121 index does not carry the newest releases. Not a problem — 2.5.1 is well within Ultralytics' supported range. The `+cu121` suffix is the confirmation it is the CUDA build.
 
 ⚠️ Do this **before** writing any code against the CPU build.
 
@@ -448,8 +395,7 @@ supported range. The `+cu121` suffix is the confirmation it is the CUDA build.
 python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 ```
 
-The package being installed does not guarantee the driver connection works. This
-is the real test.
+The package being installed does not guarantee the driver connection works. This is the real test.
 
 **Output:** `2.5.1+cu121 True NVIDIA GeForce RTX 3050 Laptop GPU` ✅
 
@@ -461,17 +407,11 @@ is the real test.
 pip install onnx onnxruntime-gpu onnxslim
 ```
 
-Ultralytics does not pull these in by default. **`onnxruntime-gpu`, not plain
-`onnxruntime`** — the GPU build enables the ONNX Runtime CUDA benchmark rows,
-which are a genuinely interesting middle point between PyTorch and TensorRT.
+Ultralytics does not pull these in by default. **`onnxruntime-gpu`, not plain `onnxruntime`** — the GPU build enables the ONNX Runtime CUDA benchmark rows, which are a genuinely interesting middle point between PyTorch and TensorRT.
 
-**Output:** `Successfully installed ... onnx-1.22.0 onnxruntime-gpu-1.23.2
-onnxslim-0.1.96 ...` ✅
+**Output:** `Successfully installed ... onnx-1.22.0 onnxruntime-gpu-1.23.2 onnxslim-0.1.96 ...` ✅
 
-⚠️ To watch later: onnxruntime-gpu 1.23 is built against CUDA 12.x, which matches
-the driver, but ORT sometimes needs cuDNN present separately on Windows. Will
-surface when the ORT-CUDA rows are actually run — the export step does not need
-the GPU.
+⚠️ To watch later: onnxruntime-gpu 1.23 is built against CUDA 12.x, which matches the driver, but ORT sometimes needs cuDNN present separately on Windows. Will surface when the ORT-CUDA rows are actually run — the export step does not need the GPU.
 
 ---
 
@@ -512,15 +452,10 @@ ONNX: export success 8.5s, saved as 'yolov5nu.onnx' (10.3 MB)
 
 **Two numbers that matter later:**
 
-- **Output shape `(1, 84, 8400)`** — this is the tensor `postprocess.py` must
-  decode by hand. 8400 candidate boxes × 84 values = 4 box coordinates + 80 COCO
-  class scores. **There is no separate objectness score**, which means this is
-  the newer YOLOv8-style anchor-free head. Important when writing the decoder.
+- **Output shape `(1, 84, 8400)`** — this is the tensor `postprocess.py` must decode by hand. 8400 candidate boxes × 84 values = 4 box coordinates + 80 COCO class scores. **There is no separate objectness score**, which means this is the newer YOLOv8-style anchor-free head. Important when writing the decoder.
 - **2,649,200 parameters, 7.7 GFLOPs** — the model-size baseline.
 
-⚠️ **Naming accuracy for the README:** `yolov5nu` is Ultralytics' retrofit of
-YOLOv5 with an anchor-free head. It is *not* the original 2020 YOLOv5. State this
-correctly — an interviewer who knows the difference will notice.
+⚠️ **Naming accuracy for the README:** `yolov5nu` is Ultralytics' retrofit of YOLOv5 with an anchor-free head. It is *not* the original 2020 YOLOv5. State this correctly — an interviewer who knows the difference will notice.
 
 ---
 
@@ -545,9 +480,7 @@ for o in m.graph.output:
 python check_onnx.py
 ```
 
-Confirms the opset really is 13 and the shapes are fixed rather than dynamic —
-both would break the engine build on the Nano, and both are cheaper to catch here
-than after the file has been transferred.
+Confirms the opset really is 13 and the shapes are fixed rather than dynamic — both would break the engine build on the Nano, and both are cheaper to catch here than after the file has been transferred.
 
 **Output:**
 
@@ -559,8 +492,7 @@ output: output0 [1, 84, 8400]
 ```
 ✅
 
-No zeros or dynamic dimensions. Tensor names — `images` in, `output0` out — are
-what the inference code will bind to.
+No zeros or dynamic dimensions. Tensor names — `images` in, `output0` out — are what the inference code will bind to.
 
 ---
 
@@ -586,12 +518,9 @@ hostname -I
 scp yolov5nu.onnx raviteja@192.168.137.244:~/
 ```
 
-`~/` is the destination — shorthand for the home directory of the user you log in
-as, so the file lands at `/home/raviteja/yolov5nu.onnx`.
+`~/` is the destination — shorthand for the home directory of the user you log in as, so the file lands at `/home/raviteja/yolov5nu.onnx`.
 
-⚠️ **Mistake made here:** ran `scp` on the *Nano* rather than the laptop, which
-told the Nano to copy a file to itself. Result: `yolov5nu.onnx: No such file or
-directory`.
+⚠️ **Mistake made here:** ran `scp` on the *Nano* rather than the laptop, which told the Nano to copy a file to itself. Result: `yolov5nu.onnx: No such file or directory`.
 
 **Telling the two machines apart at a glance:**
 
@@ -600,8 +529,7 @@ directory`.
 | `raviteja@raviteja-pc:~$` | the Nano |
 | `C:\Users\gravi\...>` | Windows |
 
-On first connection ssh asks to confirm the host fingerprint. Type `yes` in full
-— a bare `y` is rejected.
+On first connection ssh asks to confirm the host fingerprint. Type `yes` in full — a bare `y` is rejected.
 
 **Organise it on the Nano:**
 
@@ -615,7 +543,7 @@ ls -lh ~/edgevision/models/
 
 ---
 
-### 20. Build the TensorRT FP16 engine — the real test
+### 20. Build the TensorRT FP16 engine
 
 ```bash
 cd ~/edgevision/models
@@ -630,12 +558,9 @@ cd ~/edgevision/models
 | `--workspace=256` | cap build scratch memory at 256 MB |
 | `--saveEngine=` | write the compiled engine to disk |
 
-Run `jtop` in a second terminal to watch memory. Over SSH that means a second SSH
-window, not `Ctrl+Alt+T`.
+Run `jtop` in a second terminal to watch memory. Over SSH that means a second SSH window, not `Ctrl+Alt+T`.
 
-**Memory during the build peaked at 1.7/1.9 GB.** Left running deliberately —
-with swap enabled, hitting the ceiling means slowdown, not a crash. Killing it
-would have thrown away progress.
+**Memory during the build peaked at 1.7/1.9 GB.** With swap enabled the build completed despite the high memory pressure.
 
 **Result:** `&&&& PASSED` ✅
 
@@ -663,23 +588,13 @@ PWN(PWN(/model.0/act/Sigmoid), /model.0/act/Mul)
 /model.2/cv1/conv/Conv || /model.2/cv2/conv/Conv
 ```
 
-`PWN(...)` is a **fused kernel** — Sigmoid and Mul (the two halves of SiLU)
-collapsed into one operation. `||` means two convolutions running in parallel.
-This is concrete evidence of what TensorRT actually did, not just a claim. Worth
-screenshotting for the README.
+`PWN(...)` is a **fused kernel**: Sigmoid and Mul (the two halves of SiLU) are collapsed into one operation. `||` indicates parallel convolution branches. The builder log therefore confirms that TensorRT applied graph-level optimizations during engine creation.
 
-**Transfers are negligible** — 0.73 ms combined out of 46 ms, about 1.6%. Data
-movement is not the bottleneck; compute is. Useful to know *before* spending time
-optimising transfers.
+**Transfers are small** — 0.73 ms combined out of about 46 ms, roughly 1.6%. Compute dominates this engine-level measurement.
 
-**Enqueue time (9.81 ms) is well under compute time (45.28 ms)**, so the CPU is
-not starving the GPU. That would change with heavy preprocessing on the same
-thread.
+**Enqueue time (9.81 ms) is well under compute time (45.28 ms)**, so the CPU is not starving the GPU. That would change with heavy preprocessing on the same thread.
 
-⚠️ **This is engine throughput, not application throughput.** Measured with
-random input tensors: no image decode, no letterbox resize, no NMS. End-to-end
-application FPS will be meaningfully lower. This is the first half of the
-engine-vs-end-to-end comparison the plan makes a headline result.
+⚠️ **This is engine throughput, not application throughput.** It uses random input tensors and excludes image decode, letterbox resize and NMS. End-to-end FPS is measured separately later.
 
 #### Warnings seen — all benign
 
@@ -706,8 +621,7 @@ total 23M
 ```
 ✅
 
-The engine is slightly *larger* than the ONNX — the compiled kernel selections
-and weight layouts add to the payload.
+The engine is slightly *larger* than the ONNX — the compiled kernel selections and weight layouts add to the payload.
 
 ---
 
@@ -747,9 +661,7 @@ OUTPUT output0 (1, 84, 8400)    DataType.FLOAT
 
 Bindings match the ONNX exactly.
 
-**Important for `postprocess.py`:** output dtype is **FLOAT, not HALF**. FP16 is
-used *internally* for computation, but TensorRT hands back fp32 at the boundary.
-The NumPy decoder reads float32 — no conversion needed.
+**Important for `postprocess.py`:** output dtype is **FLOAT, not HALF**. FP16 is used *internally* for computation, but TensorRT hands back fp32 at the boundary. The NumPy decoder reads float32 — no conversion needed.
 
 ---
 
@@ -768,27 +680,19 @@ After all output printed successfully, the script hung and emitted:
 
 ### Root cause
 
-**Destruction-order bug, not a code bug.** `pycuda.autoinit` registers a cleanup
-that destroys the CUDA context when Python exits. TensorRT's engine object is
-still alive and gets garbage-collected *afterwards*, so it tries to free GPU
-memory in a context that no longer exists. `Ctrl+C` interrupted that cleanup
-mid-flight, hence the segfault.
+**Destruction-order bug, not a code bug.** `pycuda.autoinit` registers a cleanup that destroys the CUDA context when Python exits. TensorRT's engine object is still alive and gets garbage-collected *afterwards*, so it tries to free GPU memory in a context that no longer exists. `Ctrl+C` interrupted that cleanup mid-flight, hence the segfault.
 
 ### Impact
 
-**None.** The engine file is untouched, the GPU driver is fine, and all required
-output printed before any of this. The script's actual work completed.
+**None.** The engine file is untouched, the GPU driver is fine, and all required output printed before any of this. The script's actual work completed.
 
 ### Fix for real code
 
-In `infer_trt.py`, manage the context explicitly rather than using
-`pycuda.autoinit` — keep a reference to the context and delete the engine before
-it, or use `pycuda.driver` manually. Not worth fixing in a throwaway test, but it
-**will** recur in the real inference code.
+In `infer_trt.py`, manage the context explicitly rather than using `pycuda.autoinit` — keep a reference to the context and delete the engine before it, or use `pycuda.driver` manually. Not worth fixing in a throwaway test, but it **will** recur in the real inference code.
 
 ---
 
-## Part 0.5 — COMPLETE ✅
+## Initial Jetson setup complete
 
 | Check | Result |
 |---|---|
@@ -798,35 +702,27 @@ it, or use `pycuda.driver` manually. Not worth fixing in a throwaway test, but i
 | ONNX transferred, FP16 engine built | 654.8 s, `&&&& PASSED` ✅ |
 | Engine loads from Python, bindings correct | ✅ |
 
-**No blockers.** Everything from here is execution rather than discovery.
+At this point the basic TensorRT path was working end to end.
 
-**Baseline established:** 21.7 FPS engine throughput, 45.28 ms GPU compute,
-p99 46.17 ms, 12 MB engine.
+**Initial engine baseline:** 21.7 FPS engine throughput, 45.28 ms GPU compute, p99 46.17 ms, 12 MB engine.
 
 ---
 
 ## Working across two machines — scp direction
 
-Tripped over twice. Worth internalising before Parts 2–6, which involve pushing
-code to the Nano constantly.
+This caused mistakes more than once while moving files between the laptop and Nano.
 
 ### The client/server relationship
 
-**The Nano runs an SSH server** (`sshd`, listening on port 22, running since
-JetPack was flashed). **The laptop is the client** — it initiates connections;
-nothing listens on it.
+**The Nano runs an SSH server** (`sshd`, listening on port 22, running since JetPack was flashed). **The laptop is the client** — it initiates connections; nothing listens on it.
 
-`scp` rides on top of SSH and inherits the same relationship: the laptop can
-reach the Nano, not the other way around.
+`scp` rides on top of SSH and inherits the same relationship: the laptop can reach the Nano, not the other way around.
 
-**Therefore: always run `scp` from the laptop**, regardless of which direction the
-file is travelling. Not because scp is one-way, but because only one machine is
-reachable.
+**Therefore: always run `scp` from the laptop**, regardless of which direction the file is travelling. Not because scp is one-way, but because only one machine is reachable.
 
 ### The syntax
 
-Always `scp SOURCE DESTINATION` — source first, destination second, like
-copy-paste. The `user@ip:` prefix marks whichever side is remote:
+Always `scp SOURCE DESTINATION` — source first, destination second, like copy-paste. The `user@ip:` prefix marks whichever side is remote:
 
 ```
 # laptop → Nano  (push)
@@ -844,9 +740,7 @@ scp raviteja@192.168.137.244:~/edgevision/models/yolov5nu_fp16.engine .
 
 ### Mistakes made
 
-**Ran the pull command on the Nano.** It copied the file to itself, reported
-success at 66.7 MB/s (suspiciously fast — it never left the board), and `ls`
-showed no new file.
+**Ran the pull command on the Nano.** It copied the file to itself, reported success at 66.7 MB/s (suspiciously fast — it never left the board), and `ls` showed no new file.
 
 **Then tried a Windows path from the Nano:**
 
@@ -855,8 +749,7 @@ scp raviteja@192.168.137.244:~/.../yolov5nu_fp16.engine C:\Users\gravi\...\model
 >
 ```
 
-Hung at a `>` continuation prompt. Linux does not understand `C:\Users\...`, and
-the trailing `\` made bash treat the line as unfinished.
+Hung at a `>` continuation prompt. Linux does not understand `C:\Users\...`, and the trailing `\` made bash treat the line as unfinished.
 
 ### Check the prompt before pressing Enter
 
@@ -865,63 +758,47 @@ the trailing `\` made bash treat the line as unfinished.
 | `raviteja@raviteja-pc:~/...$` | **Nano** |
 | `PS C:\Users\gravi\...>` | **Windows** |
 
-This is the single cheapest habit to build while working across two terminals.
+Check the prompt before running transfer or install commands across the two machines.
 
 ### Could scp run *from* the Nano?
 
-Only with setup that is not worth doing: Windows ships OpenSSH **Server** as an
-optional feature (Settings → Apps → Optional Features), which then needs the
-`sshd` service started and a firewall port opened. Then the Nano could push to
-`192.168.137.1` — the laptop's address on the ICS link, always `.1`.
+Only with setup that is not worth doing: Windows ships OpenSSH **Server** as an optional feature (Settings → Apps → Optional Features), which then needs the `sshd` service started and a firewall port opened. Then the Nano could push to `192.168.137.1` — the laptop's address on the ICS link, always `.1`.
 
-Adding a permanent network service to the laptop to avoid switching terminal
-windows is not a good trade. Skipped.
+Adding a permanent network service to the laptop to avoid switching terminal windows is not a good trade. Skipped.
 
 ### Worth knowing for later
 
-`rsync` works over SSH the same way and only transfers what changed. Much faster
-than repeated `scp` when pushing code to the Nano during Parts 2–6.
+`rsync` works over SSH the same way and only transfers what changed. Much faster than repeated `scp` when pushing code to the Nano during Parts 2–6.
 
 ---
 
 ## Memory check after the spike — not a leak
 
-`jtop` showed 537 MB used, up from the ~350 MB baseline after the desktop was
-disabled. Investigated:
+`jtop` showed 537 MB used, up from the ~350 MB baseline after the desktop was disabled. Investigated:
 
 ```bash
 ps aux | grep -i python
 ```
 
-**Finding:** `spike_test.py` was gone — it exited cleanly despite the segfault.
-The memory belonged to **jetson-stats itself**: three background daemon processes
-(PIDs 6129, 6282, 6290) started at boot, plus the interactive `jtop` window
-(PID 7007, 15.8% CPU).
+**Finding:** `spike_test.py` was gone — it exited cleanly despite the segfault. The memory belonged to **jetson-stats itself**: three background daemon processes (PIDs 6129, 6282, 6290) started at boot, plus the interactive `jtop` window (PID 7007, 15.8% CPU).
 
 The tool used to watch memory was a meaningful share of the memory being watched.
 
-537 MB of 1.9 GB leaves ~1.4 GB available. The engine build peaked at 1.9 GB and
-still succeeded, so this is not a constraint. Nothing to fix.
+537 MB of 1.9 GB leaves ~1.4 GB available. The engine build peaked at 1.9 GB and still succeeded, so this is not a constraint. Nothing to fix.
 
-*Note: `free -h` is the honest view — read the **available** column, not "free".
-Linux counts cache as used, but releases it instantly under pressure.*
+*Note: `free -h` is the honest view — read the **available** column, not "free". Linux counts cache as used, but releases it instantly under pressure.*
 
 ---
 
 ## Card backup — deliberately skipped
 
-The working state now diverges from `jetson_base.img`: the IPv6 fix, PyCUDA, the
-upgraded pip, and the built engine are all missing from it.
+The working state now diverges from `jetson_base.img`: the IPv6 fix, PyCUDA, the upgraded pip, and the built engine are all missing from it.
 
-**Decision: do not re-image yet.** This log documents every command with its
-output, so recreating the state is roughly 30 minutes of following these notes,
-versus ~40 minutes and 128 GB of disk to produce an image.
+**Decision: do not re-image yet.** This log documents every command with its output, so recreating the state is roughly 30 minutes of following these notes, versus ~40 minutes and 128 GB of disk to produce an image.
 
-The one expensive artifact — the engine, 11 minutes to build — is 12 MB and can
-simply be copied off with `scp`.
+The one expensive artifact — the engine, 11 minutes to build — is 12 MB and can simply be copied off with `scp`.
 
-Revisit after Part 6, when a built container and much more slow-to-recreate state
-exist.
+Revisit after Part 6, when a built container and much more slow-to-recreate state exist.
 
 ---
 
@@ -963,7 +840,7 @@ nvidia-smi
 
 ---
 
-## Part 1 — Laptop: repository and test data
+## Repository and test data
 
 ### 23. Video toolchain
 
@@ -971,9 +848,7 @@ nvidia-smi
 winget install Gyan.FFmpeg
 ```
 
-⚠️ **Restart the shell afterwards.** winget modifies `PATH`, but the running
-terminal keeps its old copy — `ffmpeg -version` fails until a new one is opened.
-In VS Code, close the whole window, not just the terminal panel.
+⚠️ **Restart the shell afterwards.** winget modifies `PATH`, but the running terminal keeps its old copy — `ffmpeg -version` fails until a new one is opened. In VS Code, close the whole window, not just the terminal panel.
 
 **Inspect before transcoding:**
 
@@ -999,21 +874,15 @@ ffmpeg -i Inference_Video.mp4 -vf scale=1280:720 -r 30 -c:v libx264 -crf 23 \
 | `-crf 23` | quality, 0–51, lower is better |
 | `-an` | strip audio |
 
-**Why `-r 30` matters even though the source is already 30 fps:** phone and editor
-exports often use *variable* frame rate, dropping or duplicating frames during
-static scenes. "30 fps" is then nominal, and any FPS measurement inherits the
-variance.
+**Why `-r 30` matters even though the source is already 30 fps:** phone and editor exports often use *variable* frame rate, dropping or duplicating frames during static scenes. "30 fps" is then nominal, and any FPS measurement inherits the variance.
 
-**Output:** `frame= 1040 ... time=00:00:34.60` — 1040 frames at 30 fps is exactly
-34.67 s, confirming constant frame rate.
+**Output:** `frame= 1040 ... time=00:00:34.60` — 1040 frames at 30 fps is exactly 34.67 s, confirming constant frame rate.
 
 ---
 
 ### 24. Verify through OpenCV, not ffmpeg
 
-OpenCV uses different decoders, and the entire pipeline reads through it. A file
-ffmpeg writes happily can still fail to open in OpenCV or report a wrong frame
-count.
+OpenCV uses different decoders, and the entire pipeline reads through it. A file ffmpeg writes happily can still fail to open in OpenCV or report a wrong frame count.
 
 ```python
 cap = cv2.VideoCapture("data/test_video.mp4")
@@ -1047,21 +916,17 @@ git commit -m "..."
 git push -u origin main               # -u links local main to origin/main
 ```
 
-**Empty directories do not exist to git.** It tracks files, not folders, so every
-otherwise-empty directory needs a placeholder:
+**Empty directories do not exist to git.** It tracks files, not folders, so every otherwise-empty directory needs a placeholder:
 
 ```
 type nul > app\.gitkeep        # Windows equivalent of `touch`
 ```
 
-`app/` later got `__init__.py` instead, which serves the same purpose and makes
-the directory an importable package.
+`app/` later got `__init__.py` instead, which serves the same purpose and makes the directory an importable package.
 
-**Chaining commands in cmd:** `&` runs each regardless of the previous result;
-`&&` stops at the first failure.
+**Chaining commands in cmd:** `&` runs each regardless of the previous result; `&&` stops at the first failure.
 
-See `docs/GIT_NOTES.md` for the remote-edit incident and the fetch/diff/pull
-pattern.
+See `docs/GIT_NOTES.md` for the remote-edit incident and the fetch/diff/pull pattern.
 
 ---
 
@@ -1072,12 +937,9 @@ del app\.gitkeep
 type nul > app\__init__.py
 ```
 
-`benchmark.py` does `from app import postprocess, preprocess`. **Python 3.6
-requires `__init__.py` for that**; newer versions are more forgiving via implicit
-namespace packages.
+`benchmark.py` does `from app import postprocess, preprocess`. **Python 3.6 requires `__init__.py` for that**; newer versions are more forgiving via implicit namespace packages.
 
-Without it the code runs on the laptop and fails on the Nano — the worst kind of
-bug, because it appears only on the machine that matters.
+Without it the code runs on the laptop and fails on the Nano — the worst kind of bug, because it appears only on the machine that matters.
 
 ---
 
@@ -1087,9 +949,7 @@ bug, because it appears only on the machine that matters.
 pip install pyyaml psutil pytest
 ```
 
-`pyyaml` is imported directly by `benchmark.py`. `psutil` provides peak memory —
-the code falls back to Linux's `resource` module, but Windows has no fallback.
-`pytest` runs `tests/test_parity.py` and will be what CI invokes at Part 10.
+`pyyaml` is imported directly by `benchmark.py`. `psutil` provides peak memory — the code falls back to Linux's `resource` module, but Windows has no fallback. `pytest` runs `tests/test_parity.py` and will be what CI invokes at Part 10.
 
 *(All three were already present as Ultralytics dependencies.)*
 
@@ -1097,21 +957,19 @@ the code falls back to Linux's `resource` module, but Windows has no fallback.
 
 ## PROBLEM 4 — the laptop GPU ran at 10% of its clock
 
-**This invalidated every laptop measurement taken before it was found.**
+Measurements taken before this was found were moved to the exploratory results file and not used as headline numbers.
 
 ### Symptom
 
-Engine p95 rose from 29.90 ms (200 frames) to 71.61 ms (500 frames) against a p50
-of 27.07 — a 2.6× tail that appeared only in longer runs.
+Engine p95 rose from 29.90 ms (200 frames) to 71.61 ms (500 frames) against a p50 of 27.07 — a 2.6× tail that appeared only in longer runs.
 
 ### Wrong hypothesis 1 — thermal throttling
 
-The laptop's GPU fan was disconnected for noise, so this looked obvious.
+The GPU fan had been disconnected for noise, so thermal throttling was the first hypothesis.
 
 ### Wrong hypothesis 2 — memory pressure
 
-`peak_mem_mb` had grown 3048 → 5108 MB, and 5 GB on a 4 GB card would mean
-spilling into shared system memory.
+`peak_mem_mb` had grown 3048 → 5108 MB, and 5 GB on a 4 GB card would mean spilling into shared system memory.
 
 ### The diagnostic
 
@@ -1133,11 +991,9 @@ nvidia-smi --query-gpu=clocks.max.sm,power.limit --format=csv
 → 2100 MHz, [N/A]
 ```
 
-**210 MHz against a 2100 MHz ceiling — exactly 10%**, while reporting 85%
-utilisation. Genuinely busy, just crawling.
+**210 MHz against a 2100 MHz ceiling — exactly 10%**, while reporting 85% utilisation. Genuinely busy, just crawling.
 
-*(`power.limit` returning `[N/A]` is normal for laptop GPUs under WDDM; vendor
-firmware manages it rather than exposing it.)*
+*(`power.limit` returning `[N/A]` is normal for laptop GPUs under WDDM; vendor firmware manages it rather than exposing it.)*
 
 ### Reconnecting the fan made things WORSE
 
@@ -1148,21 +1004,17 @@ firmware manages it rather than exposing it.)*
 | capture | 2.32 ms | 6.75 ms |
 | postprocess | 2.19 ms | 7.86 ms |
 
-**The tell: CPU-only stages slowed 3–4× too.** Preprocessing and NMS never touch
-the GPU. Reconnecting a *GPU* fan cannot slow down NumPy — so the whole machine
-was slower, not the GPU.
+CPU-only stages also slowed by 3–4×. Since preprocessing and NMS do not use the GPU, the slowdown was system-wide rather than a GPU cooling effect.
 
 ### Root cause: Windows "Whisper" power mode
 
-A vendor quiet profile capping both CPU and GPU clocks. Active for every run up to
-that point.
+A vendor quiet profile capping both CPU and GPU clocks. Active for every run up to that point.
 
 ```
 powercfg /getactivescheme
 ```
 
-**Fix:** Windows Settings → System → Power & battery → Power mode → **Best
-performance**. On mains.
+**Fix:** Windows Settings → System → Power & battery → Power mode → **Best performance**. On mains.
 
 ### Result
 
@@ -1172,17 +1024,13 @@ performance**. On mains.
 | Balanced | ~550–1057 MHz | 18.16 ms | 55.1 | 31.4 |
 | **Best performance** | ~950–1057 MHz | **14.05 ms** | **71.2** | **41.1** |
 
-**5.3× from power settings alone**, identical code and hardware.
+The power-profile change produced a 5.3× inference difference with the same code and hardware.
 
 ### Deliberately not pursued further
 
-Even at Best performance the GPU peaks near 1057 MHz of 2100 and utilisation tops
-out at ~42% — a vendor profile still caps it.
+Even at Best performance the GPU peaks near 1057 MHz of 2100 and utilisation tops out at ~42% — a vendor profile still caps it.
 
-Not chased, because at 42% utilisation the GPU is idle more than half the time,
-waiting on the CPU. Capture + preprocess + postprocess = **10.3 ms of CPU work**
-against 14.05 ms of GPU work. Raising the GPU clock shrinks the 14 ms and leaves
-the 10.3 ms untouched.
+Not chased, because at 42% utilisation the GPU is idle more than half the time, waiting on the CPU. Capture + preprocess + postprocess = **10.3 ms of CPU work** against 14.05 ms of GPU work. Raising the GPU clock shrinks the 14 ms and leaves the 10.3 ms untouched.
 
 ### The fan was irrelevant
 
@@ -1193,8 +1041,7 @@ Measured afterwards, three runs each on mains:
 | Fan on | 47.11 ± 1.72 ms |
 | Fan off | 48.80 ± 2.51 ms |
 
-Overlapping error bars. **No measurable effect on CPU inference.** Fan stays
-detached.
+Overlapping error bars. **No measurable effect on CPU inference.** Fan stays detached.
 
 ---
 
@@ -1205,14 +1052,11 @@ detached.
 | Battery | **132.95 ms** | 6.23 | **4.88** |
 | Mains | **51.54 ms** | 15.54 | — |
 
-**Windows caps CPU clocks hard on battery regardless of the "Best performance"
-setting.**
+**Windows caps CPU clocks hard on battery regardless of the "Best performance" setting.**
 
-The progress log shows the collapse live: 74.9 → 313.0 → 214.9 → 204.6 ms. Normal
-for ~100 frames, then the battery power cap engages.
+The progress log shows the collapse live: 74.9 → 313.0 → 214.9 → 204.6 ms. Normal for ~100 frames, then the battery power cap engages.
 
-`fps_sustained_last_60s` caught it — 4.88 against a mean of 6.23. First time that
-column earned its place.
+`fps_sustained_last_60s` exposed the drop: 4.88 FPS against a mean of 6.23 FPS.
 
 **Consequence: every laptop measurement must be on mains.**
 
@@ -1224,36 +1068,29 @@ Adopted after Problems 4 and 5, and followed for every row in `results/speed.csv
 
 1. **Mains power.** Battery costs 2.6× on CPU.
 2. **Highest performance profile**, recorded via `--host-profile`.
-3. **Three runs minimum per configuration.** Two cannot establish a difference
-   below ~15% — an 8.4% FP16-vs-FP32 gap was observed, withdrawn as noise, then
-   confirmed once 8 and 6 samples existed.
-4. **GPU runs before CPU runs**, so CPU load does not heat the machine and skew
-   the GPU measurements.
+3. **Three runs minimum per configuration.** Two cannot establish a difference below ~15% — an 8.4% FP16-vs-FP32 gap was observed, withdrawn as noise, then confirmed once 8 and 6 samples existed.
+4. **GPU runs before CPU runs**, so CPU load does not heat the machine and skew the GPU measurements.
 5. **~30 s between runs**, so each starts from a similar thermal state.
-6. On the Jetson: `nvpmodel` mode set and `jetson_clocks` applied, both recorded.
+6. On the Jetson: record the `nvpmodel` mode, clock-lock state and fan configuration for every run.
 
 ---
 
 ### 28. Harness change: `--host-profile`
 
-Added after the fact, because two runs of identical code differed by **5×** with
-nothing in the CSV to explain it.
+Added after the fact, because two runs of identical code differed by **5×** with nothing in the CSV to explain it.
 
 ```
 python benchmarks/benchmark.py --runtime pytorch --device cuda --precision fp32 \
     --frames 500 --host-profile best-performance-mains --notes "run 1"
 ```
 
-On the Jetson `nvpmodel -q` reports power state automatically; **Windows exposes
-nothing equivalent**, so it is supplied explicitly and folded into the config
-hash.
+On the Jetson `nvpmodel -q` reports power state automatically; **Windows exposes nothing equivalent**, so it is supplied explicitly and folded into the config hash.
 
-Existing rows were moved to `results/speed_exploratory.csv` rather than deleted —
-they are the evidence behind Problem 4. See `results/README.md`.
+Existing rows were moved to `results/speed_exploratory.csv` rather than deleted — they are the evidence behind Problem 4. See `results/README.md`.
 
 ---
 
-## Part 3 — Validation
+## Validation
 
 ### 29. ONNX export parity
 
@@ -1262,16 +1099,11 @@ pytest tests/test_parity.py -v
 → 6 passed in 3.24s
 ```
 
-Five frames through both PyTorch and ONNX Runtime, comparing raw
-`(1, 84, 8400)` tensors at `atol/rtol = 1e-3`.
+Five frames through both PyTorch and ONNX Runtime, comparing raw `(1, 84, 8400)` tensors at `atol/rtol = 1e-3`.
 
-**Why not exact equality:** FP32 arithmetic is not associative. Two runtimes that
-fuse or reorder operations differently will not produce bit-identical output.
+**Why not exact equality:** FP32 arithmetic is not associative. Two runtimes that fuse or reorder operations differently will not produce bit-identical output.
 
-**`test_class_scores_are_probabilities`** asserts the 80 class columns lie in
-[0, 1]. If the head had an objectness column the columns would be offset by one
-and the last would hold unbounded box data — so this passing confirms the
-anchor-free layout.
+**`test_class_scores_are_probabilities`** asserts the 80 class columns lie in [0, 1]. If the head had an objectness column the columns would be offset by one and the last would hold unbounded box data — so this passing confirms the anchor-free layout.
 
 ---
 
@@ -1290,31 +1122,19 @@ python evaluation/validate_decoder.py --frames 10 --save-overlay
 
 **Sub-pixel mean error establishes the letterbox-undo maths is correct.**
 
-**Every unmatched detection fell between conf 0.252 and 0.287**, against a 0.25
-threshold — borderline cases, as predicted.
+**Every unmatched detection fell between conf 0.252 and 0.287**, against a 0.25 threshold — borderline cases, as predicted.
 
-Visual inspection of the overlays showed ours found a person Ultralytics missed
-(frame 0, conf 0.257), and produced three tight boxes on individual kites where
-Ultralytics produced one enormous box across the whole bunting line (frame 808).
-The latter is an NMS difference, and ours is the more sensible output.
+Visual inspection of the overlays showed ours found a person Ultralytics missed (frame 0, conf 0.257), and produced three tight boxes on individual kites where Ultralytics produced one enormous box across the whole bunting line (frame 808). The latter is an NMS difference, and ours is the more sensible output.
 
-**The max errors are preprocessing, not decoding.** Ultralytics pads to a stride
-multiple with a rectangular letterbox; `app/preprocess.py` always pads to a square
-640×640. Different input pixels, slightly different predictions. Square padding is
-correct here — it is what the ONNX export declares and what the engine was built
-for.
+**The max errors are preprocessing, not decoding.** Ultralytics pads to a stride multiple with a rectangular letterbox; `app/preprocess.py` always pads to a square 640×640. Different input pixels, slightly different predictions. Square padding is correct here — it is what the ONNX export declares and what the engine was built for.
 
 Tolerances set to 10 px / 0.2 accordingly, with the reasoning in the source.
 
-**Bug found:** the first run crashed on frame 2 with
-`Input type (torch.FloatTensor) and weight type (torch.cuda.FloatTensor) should be
-the same`. **`yolo.predict()` moves the underlying model to CUDA as a side
-effect**, so the next raw call fed a CPU tensor to a GPU model. Fixed by pinning
-the model, input tensor and `predict()` to CPU explicitly.
+**Bug found:** the first run crashed on frame 2 with `Input type (torch.FloatTensor) and weight type (torch.cuda.FloatTensor) should be the same`. **`yolo.predict()` moves the underlying model to CUDA as a side effect**, so the next raw call fed a CPU tensor to a GPU model. Fixed by pinning the model, input tensor and `predict()` to CPU explicitly.
 
 ---
 
-## Part 4 — Nano: running the pipeline on target
+## Nano deployment
 
 ### 31. Recovering an unresponsive board
 
@@ -1326,12 +1146,9 @@ arp -a | findstr 192.168.137
   192.168.137.244  48-b0-2d-2f-64-83  static
 ```
 
-Laptop had `.1` so ICS was running; the Nano's MAC was cached. `static` rather
-than `dynamic` is the hint — a cached record, not proof the board is alive.
+Laptop had `.1` so ICS was running; the Nano's MAC was cached. `static` rather than `dynamic` is the hint — a cached record, not proof the board is alive.
 
-**Resolution: attach a monitor, restart.** Second time it booted normally. This
-has now happened twice; a third occurrence would warrant investigating SD card
-seating or power delivery at boot.
+**Resolution: attach a monitor, restart.** Second time it booted normally. This has now happened twice; a third occurrence would warrant investigating SD card seating or power delivery at boot.
 
 ### 32. Making the CUDA paths permanent
 
@@ -1341,8 +1158,7 @@ echo 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH' >> ~/.bashr
 tail -2 ~/.bashrc                                   # verify
 ```
 
-⚠️ **`>>` appends; a single `>` truncates the file first.** One character between
-adding a line and destroying a shell configuration.
+⚠️ **`>>` appends; a single `>` truncates the file first.** One character between adding a line and destroying a shell configuration.
 
 ### 33. Back to headless
 
@@ -1370,8 +1186,7 @@ HDMI is hot-pluggable; the monitor can be pulled while running.
 
 ### 34. Cloning the repo with a personal access token
 
-**GitHub → Settings → Developer settings → Personal access tokens →
-Fine-grained tokens.**
+**GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens.**
 
 | Field | Value |
 |---|---|
@@ -1389,9 +1204,7 @@ git clone https://github.com/RaviTejaNjr/EdgeVision.git
 
 Username `RaviTejaNjr`, token as the password. Nothing displays while pasting.
 
-**Why clone rather than `scp`:** without a repo on the Nano, the `git_commit`
-column in `speed.csv` reads `unknown`, breaking the provenance chain. Code also
-iterates between machines through Parts 5–6.
+**Why clone rather than `scp`:** without a repo on the Nano, the `git_commit` column in `speed.csv` reads `unknown`, breaking the provenance chain. Code also iterates between machines through Parts 5–6.
 
 ### 35. Placing the artifacts
 
@@ -1401,8 +1214,7 @@ mv ~/spike_artifacts/models/yolov5nu.onnx models/
 mv ~/spike_artifacts/models/yolov5nu_fp16.engine models/
 ```
 
-Both are gitignored, so the clone could not bring them, but
-`configs/params.yaml` expects them in `models/`.
+Both are gitignored, so the clone could not bring them, but `configs/params.yaml` expects them in `models/`.
 
 **From the laptop**, the one file that must be copied manually:
 
@@ -1419,15 +1231,13 @@ python3 -c "import yaml; print('ok')"      → ok
 python3 -c "import psutil"                 → ModuleNotFoundError
 ```
 
-**Check before installing.** numpy and OpenCV are JetPack builds with CUDA and
-GStreamer support; pip versions would shadow them with inferior ones.
+**Check before installing.** numpy and OpenCV are JetPack builds with CUDA and GStreamer support; pip versions would shadow them with inferior ones.
 
 ```bash
 pip3 install --user psutil
 ```
 
-Arrived as a **prebuilt aarch64 wheel for cp36** — no compilation. Version 7.2.2,
-matching the laptop, so memory figures are comparable.
+Arrived as a **prebuilt aarch64 wheel for cp36** — no compilation. Version 7.2.2, matching the laptop, so memory figures are comparable.
 
 ### 37. Locking the board state before measuring
 
@@ -1444,8 +1254,7 @@ cat /sys/devices/pwm-fan/target_pwm    # 0 = off, 255 = full
 sudo sh -c 'echo 255 > /sys/devices/pwm-fan/target_pwm'
 ```
 
-Fan deliberately left **off** for the baseline — the fan-on comparison is a Part 7
-experiment, and changing conditions midway would invalidate it.
+The baseline started with the fan at PWM 0. Stock thermal control remained active, so the governor could still start the fan if the temperature reached its threshold.
 
 ### 38. The benchmark run
 
@@ -1465,9 +1274,7 @@ python3 benchmarks/benchmark.py --runtime tensorrt --precision fp16 \
 | End-to-end FPS | 12.51 | 0.46% |
 | Mean detections | 8.32 | — |
 
-⚠️ **`--clocks-locked` is not auto-detected.** The first run recorded `false`
-despite `jetson_clocks` having been applied — the harness takes whatever the flag
-says. Pass it explicitly.
+⚠️ **`--clocks-locked` is not auto-detected.** The first run recorded `false` despite `jetson_clocks` having been applied — the harness takes whatever the flag says. Pass it explicitly.
 
 ⚠️ **TensorRT warning on every run:**
 
@@ -1476,16 +1283,13 @@ says. Pass it explicitly.
 recommended and is likely to affect performance or even cause errors.
 ```
 
-The engine was built during the day-zero spike, before several reboots. Numbers
-are stable and detections correct, so probably benign. Part 5 rebuilds it properly.
+The engine was built during the day-zero spike, before several reboots. Numbers are stable and detections correct, so probably benign. Part 5 rebuilds it properly.
 
 ---
 
 ### 39. TorchScript export — the PyTorch path for the Nano
 
-Ultralytics cannot run on Python 3.6, so `backends.py`'s PyTorch path is
-unavailable on the Jetson. TorchScript solves it: a self-contained file holding
-architecture and weights, loadable with `torch.jit.load()` and nothing else.
+Ultralytics cannot run on Python 3.6, so `backends.py`'s PyTorch path is unavailable on the Jetson. TorchScript solves it: a self-contained file holding architecture and weights, loadable with `torch.jit.load()` and nothing else.
 
 **Two manual trace attempts failed:**
 
@@ -1494,15 +1298,13 @@ RuntimeError: Tracer cannot infer type of (tensor(...), {'boxes':..., 'feats':[.
 Dictionary inputs to traced functions must have consistent type.
 ```
 
-The model returns `(predictions, extras)` with `extras` a dict of mixed tensors
-and lists. After wrapping to return only the prediction tensor:
+The model returns `(predictions, extras)` with `extras` a dict of mixed tensors and lists. After wrapping to return only the prediction tensor:
 
 ```
 ERROR: Tensor-valued Constant nodes differed in value across invocations.
 ```
 
-**Ultralytics caches anchor points after the first forward pass**, so the two
-trace runs produce different graphs.
+**Ultralytics caches anchor points after the first forward pass**, so the two trace runs produce different graphs.
 
 **Use the library's own exporter instead:**
 
@@ -1511,9 +1313,7 @@ model = YOLO(cfg["model"]["weights"])
 model.export(format="torchscript", imgsz=cfg["model"]["input_res"])
 ```
 
-It warms the model before tracing, so the anchor cache is populated and both
-invocations match. **Lesson: when a library ships its own exporter, use it — it
-knows about internal state you do not.**
+It warms the model before tracing, so the anchor cache is populated and both invocations match. Using Ultralytics' exporter avoids the cached-state mismatch seen with direct tracing.
 
 Add to `.gitignore`:
 
@@ -1525,17 +1325,13 @@ Add to `.gitignore`:
 
 ### 40. Installing NVIDIA's PyTorch wheel on the Nano
 
-**System libraries first** — the wheel is dynamically linked against these, and
-without them the install succeeds and `import torch` then fails on a missing
-shared library:
+**System libraries first** — the wheel is dynamically linked against these, and without them the install succeeds and `import torch` then fails on a missing shared library:
 
 ```bash
 sudo apt-get install -y libopenblas-base libopenmpi-dev libomp-dev
 ```
 
-**Download the wheel.** PyPI has no Jetson build; NVIDIA hosts these separately,
-and each wheel matches one JetPack/Python/CUDA combination. JetPack 4.6 needs
-**torch 1.10.0, cp36, aarch64**:
+**Download the wheel.** PyPI has no Jetson build; NVIDIA hosts these separately, and each wheel matches one JetPack/Python/CUDA combination. JetPack 4.6 needs **torch 1.10.0, cp36, aarch64**:
 
 ```bash
 wget https://nvidia.box.com/shared/static/fjtbno0vpo676a25cgvuqc1wty0fkkg6.whl \
@@ -1550,9 +1346,7 @@ wget https://nvidia.box.com/shared/static/fjtbno0vpo676a25cgvuqc1wty0fkkg6.whl \
 pip3 install --user --no-deps torch-1.10.0-cp36-cp36m-linux_aarch64.whl
 ```
 
-`--no-deps` because the wheel declares `typing-extensions` and `dataclasses`,
-which pip would resolve from PyPI and may pull versions that fail to build on 3.6.
-Nothing turned out to be missing.
+`--no-deps` because the wheel declares `typing-extensions` and `dataclasses`, which pip would resolve from PyPI and may pull versions that fail to build on 3.6. Nothing turned out to be missing.
 
 **Verify:**
 
@@ -1572,11 +1366,9 @@ python3 models/check_torchscript.py
 → returns a tensor: (1, 84, 8400) torch.float32
 ```
 
-**`torch.jit.load` works with torch alone.** YOLOv5n is pure convolutions, so the
-traced graph contains no torchvision operators — no `nms`, no `roi_align`.
+**`torch.jit.load` works with torch alone.** YOLOv5n is pure convolutions, so the traced graph contains no torchvision operators — no `nms`, no `roi_align`.
 
-The riskiest step in the plan — a 1–2 hour source compile on a 2 GB board with
-real OOM risk — was avoided entirely by choosing TorchScript over cloning YOLOv5.
+The riskiest step in the plan — a 1–2 hour source compile on a 2 GB board with real OOM risk — was avoided entirely by choosing TorchScript over cloning YOLOv5.
 
 ---
 
@@ -1603,9 +1395,9 @@ Three runs each of TorchScript FP32 and TensorRT FP16:
 
 ---
 
-## Part 5 — Engines and accuracy
+## Engines and accuracy
 
-### 43. Recovering from "cable unplugged" — the real fix
+### 43. Recovering from "cable unplugged"
 
 Third SSH failure. The diagnostic chain, in order:
 
@@ -1627,16 +1419,13 @@ sudo dhclient -v eth0
 #    Request going out, nothing replying.
 ```
 
-**The cause was on the Windows side:** the Ethernet adapter reported **"Network
-cable unplugged"** while the Nano reported `LOWER_UP`.
+**The cause was on the Windows side:** the Ethernet adapter reported **"Network cable unplugged"** while the Nano reported `LOWER_UP`.
 
 **The fix — and it is the first thing to try next time:**
 
 `ncpa.cpl` → right-click Ethernet → **Disable**, wait, → **Enable**.
 
-Re-seating the cable at both ends did nothing. Windows had the adapter in a
-phantom state, probably after sleep/wake. **This explains all three earlier
-failures** — never a boot problem, never a DHCP race.
+Re-seating the cable at both ends did nothing. Windows had the adapter in a phantom state, probably after sleep/wake. **This explains all three earlier failures** — never a boot problem, never a DHCP race.
 
 ---
 
@@ -1647,30 +1436,23 @@ python3 models/build_trt_engine.py --precision fp16
 python3 models/build_trt_engine.py --precision fp32
 ```
 
-Replaces the day-zero `trtexec` invocation. Reproducible, and it prints the
-platform capability flags:
+Replaces the day-zero `trtexec` invocation. Reproducible, and it prints the platform capability flags:
 
 ```
 platform_has_fast_fp16 : True
 platform_has_fast_int8 : False
 ```
 
-**That second line is TensorRT's own API declaring INT8 unavailable** — a far
-stronger citation than documentation, and reproducible by anyone with the board.
+The second line comes directly from TensorRT's platform capability check and records that the Nano does not expose a fast INT8 path.
 
 | Engine | Build time | Size |
 |---|---|---|
 | FP32 | 151.0 s | 22.9 MB |
 | FP16 | 362.6 s | 11.8 MB |
 
-**FP16 takes 2.4× longer to build** — the auto-tuner has both precisions available
-per layer, so a larger search space. The engine is half the size because FP32
-weights are 4 bytes and FP16 are 2.
+**FP16 takes 2.4× longer to build** — the auto-tuner has both precisions available per layer, so a larger search space. The engine is half the size because FP32 weights are 4 bytes and FP16 are 2.
 
-⚠️ **The rebuilt engine was 2.2% faster than the spike-built one** (50.64 vs
-51.76 ms, five times the CV). Same ONNX, same script, same workspace — but built
-headless on an idle board with more free memory. **TensorRT auto-tuning is
-sensitive to the state of the machine it runs on.**
+⚠️ **The rebuilt engine was 2.2% faster than the spike-built one** (50.64 vs 51.76 ms, five times the CV). Same ONNX, same script, same workspace — but built headless on an idle board with more free memory. **TensorRT auto-tuning is sensitive to the state of the machine it runs on.**
 
 ---
 
@@ -1678,9 +1460,7 @@ sensitive to the state of the machine it runs on.**
 
 ⚠️ **A bug that produced a wrong row rather than a crash.**
 
-`--precision fp32` returned 50.74 ms — identical to FP16. `backends.py` read
-`cfg["model"]["engine"]`, a single hardcoded path pointing at the FP16 file. The
-flag reached the CSV label but never reached engine selection.
+`--precision fp32` returned 50.74 ms — identical to FP16. `backends.py` read `cfg["model"]["engine"]`, a single hardcoded path pointing at the FP16 file. The flag reached the CSV label but never reached engine selection.
 
 **Fix — two keys and an explicit failure:**
 
@@ -1696,12 +1476,7 @@ if key not in cfg["model"]:
                      "models/build_trt_engine.py --precision %s" % (key, precision))
 ```
 
-**The raise matters.** A missing engine should stop the run, not quietly
-substitute a different one.
-
-Same family as `clocks_locked` recording `false` while clocks were locked, and
-`peak_mem_mb` measuring host RSS. **A field that can silently disagree with
-reality is worse than no field**, because it looks like evidence.
+A missing engine should stop the run rather than substitute a different precision. The same principle applies to metadata such as `clocks_locked` and memory fields: recorded values need to describe what actually ran.
 
 ---
 
@@ -1722,9 +1497,7 @@ python evaluation/coco_eval.py --detections results/detections_tensorrt_fp16.jso
     --runtime tensorrt --precision fp16 --device nano --subset 5000
 ```
 
-**Why split across machines:** `pycocotools` compiles a C extension, and keeping
-it on the laptop avoids another build on the board. It also means one scoring
-implementation is used for every runtime.
+**Why split across machines:** `pycocotools` compiles a C extension, and keeping it on the laptop avoids another build on the board. It also means one scoring implementation is used for every runtime.
 
 Add to `.gitignore` — the detection JSONs are 49 MB each and regenerable:
 
@@ -1733,21 +1506,13 @@ data/coco/
 results/detections_*.json
 ```
 
-⚠️ **Evaluation runs at conf 0.001, not the runtime's 0.25.** mAP is the area
-under the precision–recall curve; high-recall points come only from low-confidence
-detections. 0.001 with `max_det=300` is the COCO convention that every published
-figure uses. *(Detections averaged 106.2 per image, so the cap was never hit.)*
+⚠️ **Evaluation runs at conf 0.001, not the runtime's 0.25.** mAP is the area under the precision–recall curve; high-recall points come only from low-confidence detections. 0.001 with `max_det=300` is the COCO convention that every published figure uses. *(Detections averaged 106.2 per image, so the cap was never hit.)*
 
-⚠️ **COCO category ids are not 0..79.** The original 91-class set had 11 removed,
-so ids skip 12, 26, 29, 30, 45, 66, 68, 69, 71, 83, 91. Model index 11 maps to
-category **13**. A naive `cls + 1` would score every detection against the wrong
-class and produce a plausible near-zero mAP rather than an error.
+⚠️ **COCO category ids are not 0..79.** The original 91-class set had 11 removed, so ids skip 12, 26, 29, 30, 45, 66, 68, 69, 71, 83, 91. Model index 11 maps to category **13**. A naive `cls + 1` would score every detection against the wrong class and produce a plausible near-zero mAP rather than an error.
 
-**Timing:** ~9 min per configuration on the Nano at 6.4–10 img/s; ~40 s per
-configuration to score on the laptop.
+**Timing:** ~9 min per configuration on the Nano at 6.4–10 img/s; ~40 s per configuration to score on the laptop.
 
-**Results:** mAP@50-95 of 0.3343 (TorchScript FP32 and TensorRT FP32, identical to
-four decimal places) and 0.3342 (TensorRT FP16).
+**Results:** mAP@50-95 of 0.3343 (TorchScript FP32 and TensorRT FP32, identical to four decimal places) and 0.3342 (TensorRT FP16).
 
 ---
 
@@ -1758,8 +1523,7 @@ sudo sh -c 'echo 255 > /sys/devices/pwm-fan/target_pwm'
 cat /sys/devices/pwm-fan/target_pwm
 ```
 
-**Manual writes do not stick.** Set to 255, it reset to 0 on its own; later, under
-sustained load, it rose to 80 without intervention at roughly 50 °C.
+**Manual writes do not stick.** Set to 255, it reset to 0 on its own; later, under sustained load, it rose to 80 without intervention at roughly 50 °C.
 
 ```bash
 systemctl list-units | grep -i fan
@@ -1767,23 +1531,17 @@ systemctl list-units | grep -i fan
 #    not cooling. Unfortunate name collision.
 ```
 
-No userspace daemon to stop — the control lives in the kernel `pwm-fan` driver or
-`nvpmodel`'s thermal policy.
+No userspace daemon to stop — the control lives in the kernel `pwm-fan` driver or `nvpmodel`'s thermal policy.
 
-**Consequence for Part 7:** a ten-minute run will cross the threshold and the
-governor will engage partway through. Sustained measurements will therefore be
-taken **with stock thermal management active** — which is the more honest claim
-anyway, since it is how the board behaves in service.
+For the sustained thermal study, stock thermal management is left active so the run reflects the board's normal operating behavior.
 
-*(Earlier runs peaked at 42–49.5 °C, just under the trigger, so they were
-genuinely fan-off. But `--fan false` means "the governor did not engage", not "the
-fan was disabled".)*
+*(Earlier runs peaked at 42–49.5 °C, just under the trigger, so they were genuinely fan-off. But `--fan false` means "the governor did not engage", not "the fan was disabled".)*
 
 ---
 
-## Part 6 — Containerisation
+## Containerisation
 
-### 48. Two Part 0 steps that had silently not applied
+### 48. Docker host setup corrections
 
 ```bash
 docker images
@@ -1802,9 +1560,7 @@ ssh raviteja@192.168.137.244
 groups                                  # docker now present
 ```
 
-And `/etc/docker/daemon.json` defined the nvidia runtime but omitted
-**`"default-runtime": "nvidia"`** — so every `docker run` had been using the
-standard runtime with no GPU access.
+And `/etc/docker/daemon.json` defined the nvidia runtime but omitted **`"default-runtime": "nvidia"`** — so every `docker run` had been using the standard runtime with no GPU access.
 
 ```json
 {
@@ -1822,12 +1578,11 @@ standard runtime with no GPU access.
 sudo systemctl restart docker
 ```
 
-⚠️ **Neither failed loudly at the time.** Both surfaced only when something
-actually needed them, weeks later.
+Neither issue failed during the original setup step. They only became visible once Docker needed group access and GPU runtime support.
 
 ---
 
-### 49. What the base image actually provides
+### 49. What the base image provides
 
 ```bash
 docker pull nvcr.io/nvidia/l4t-base:r32.7.1          # ~700 MB compressed
@@ -1837,9 +1592,7 @@ docker run --rm nvcr.io/nvidia/l4t-base:r32.7.1 \
 → 8.2.1.8
 ```
 
-**TensorRT works inside a base image that contains no TensorRT.** The nvidia
-container runtime bind-mounts it from the host. That is why the image stays small
-and why it must be built and run on the Jetson.
+TensorRT imports successfully inside `l4t-base` because the NVIDIA container runtime exposes the host JetPack libraries to the container. The application image therefore does not install TensorRT separately.
 
 Everything else is absent and must be installed:
 
@@ -1856,8 +1609,7 @@ docker run --rm nvcr.io/nvidia/l4t-base:r32.7.1 python3 -c "import numpy"
 
 **Failure 1 — `no such option: --no-build-isolation`**
 
-Ubuntu ships **pip 9.0.1**; the flag arrived in pip 10. The host had been upgraded
-to 20.3.4 in Part 0.
+Ubuntu ships **pip 9.0.1**; the flag arrived in pip 10. The host had been upgraded to 20.3.4 in Part 0.
 
 ```dockerfile
 RUN pip3 install --no-cache-dir --upgrade "pip<21.0" setuptools wheel
@@ -1865,9 +1617,7 @@ RUN pip3 install --no-cache-dir --upgrade "pip<21.0" setuptools wheel
 
 **Failure 2 — `UnicodeDecodeError: 'ascii' codec can't decode byte 0xe2`**
 
-Byte `0xe2` is the first byte of an **em dash**, in a YAML *comment* in
-`params.yaml`. The container has no locale, so Python 3.6 falls back to ASCII for
-file I/O.
+Byte `0xe2` is the first byte of an **em dash**, in a YAML *comment* in `params.yaml`. The container has no locale, so Python 3.6 falls back to ASCII for file I/O.
 
 ```dockerfile
 ENV LANG=C.UTF-8
@@ -1878,19 +1628,15 @@ ENV LC_ALL=C.UTF-8
 
 **Failure 3 — `ModuleNotFoundError: No module named 'six'`**
 
-`pycuda.driver` imports `six` at runtime but does not declare it as a dependency.
-The host had it from another package.
+`pycuda.driver` imports `six` at runtime but does not declare it as a dependency. The host had it from another package.
 
 ```dockerfile
 RUN pip3 install --no-cache-dir --no-build-isolation "pycuda==2020.1" six
 ```
 
-**All three were things the host provided ambiently.** A container that builds and
-runs is a proof that the dependency list is complete.
+All three dependencies were already present on the host through other packages or configuration. Building the container exposed them because the image started from a cleaner environment.
 
-**Also:** a transient apt 404 on `bionic-security/universe` failed one build and
-succeeded on retry. The host reached the same repo fine. Mirror flakiness — retry
-before diagnosing.
+**Also:** a transient apt 404 on `bionic-security/universe` failed one build and succeeded on retry. The host reached the same repo fine. Mirror flakiness — retry before diagnosing.
 
 ---
 
@@ -1901,8 +1647,7 @@ Sending build context to Docker daemon  1.192GB     # before
 Sending build context to Docker daemon  76.29kB     # after
 ```
 
-**Docker copies the whole project directory to the daemon before building**,
-including `data/coco/` — 777 MB the container never uses.
+**Docker copies the whole project directory to the daemon before building**, including `data/coco/` — 777 MB the container never uses.
 
 ```
 data/
@@ -1917,10 +1662,7 @@ __pycache__/
 .vscode/
 ```
 
-⚠️ **Layer ordering matters.** Adding the `ENV LANG` lines invalidated the cache
-for every step below them, forcing apt and PyCUDA to rebuild — 10 minutes. The
-Dockerfile puts `ENV` and dependency installs first and `COPY app/` last;
-reversing that would mean **every code change rebuilds PyCUDA**.
+⚠️ **Layer ordering matters.** Adding the `ENV LANG` lines invalidated the cache for every step below them, forcing apt and PyCUDA to rebuild — 10 minutes. The Dockerfile puts `ENV` and dependency installs first and `COPY app/` last; reversing that would mean **every code change rebuilds PyCUDA**.
 
 ---
 
@@ -1936,40 +1678,180 @@ docker run --rm \
     edgevision:latest --runtime tensorrt --precision fp16 --frames 500
 ```
 
-`--rm` deletes the container on exit; the image stays. `-v host:container` mounts
-a host directory inside — how the engine and video get in without being baked into
-the image.
+`--rm` deletes the container on exit; the image stays. `-v host:container` mounts a host directory inside — how the engine and video get in without being baked into the image.
 
-**Result — three runs each:**
+**Final result — six runs in one session, three of each, using the same benchmark harness on both sides:**
 
-| | Bare metal | Container | Difference |
-|---|---|---|---|
-| Inference | 50.64 ± 0.12 ms | 50.50 ± 0.06 ms | **−0.27%** |
-| End-to-end FPS | 12.60 | 12.55 | −0.34% |
-| Objects per frame | 9 | 9 | identical |
+| Metric | Bare metal | Container | Difference |
+|---|---:|---:|---:|
+| Inference | 50.77 ± 0.03 ms | 50.84 ± 0.02 ms | **+0.14%** |
+| End-to-end FPS | 12.57 ± 0.01 | 12.49 ± 0.02 | **−0.66%** |
+| Preprocess | 13.95 ± 0.01 ms | 14.30 ± 0.04 ms | **+2.48%** |
+| Peak memory | 1065 MB | 1109 MB | +4.06% |
+| Mean detections | 8.32 | 8.32 | identical |
 
-**Both differences sit below the 0.23% run-to-run CV.** Containerisation costs
-nothing measurable — Docker is process isolation via namespaces and cgroups, not
-virtualisation, so nothing sits between the code and the GPU.
-
-*(Cold start read 8713.9 ms on the first container run, then 4472.5 and 4229.5.
-Page-cache warming, not container overhead.)*
+Inference differs by only 0.14%, inside the measurement noise. The measurable end-to-end difference is CPU-side: preprocessing is 2.48% slower in the container. The likely cause is the OpenCV build — the container uses the plain Debian package, while the JetPack host build includes platform-specific optimisations. This is a specific library/build difference rather than GPU virtualisation overhead.
 
 ---
 
-## Still to do
+## Sustained thermal and power-mode study
 
-- [ ] Make the repo public, add topics and an About description
-- [ ] Re-add the CI badge once `.github/workflows/ci.yml` goes green
-- [ ] **Part 7:** thermal and performance-per-watt study
-- [ ] Parts 8–10: detection sink, monitoring + watchdog, CI — NVIDIA torch wheel, torchvision from source,
-      YOLOv5 dependencies pinned for Python 3.6. **Timeboxed to 2 hours**; fall
-      back to Option B if torchvision does not compile
-- [ ] Check the preprocessing-share prediction: CPU stages are ~40% of the frame
-      on an i9; on four ARM Cortex-A57 cores they should dominate
-- [ ] Try `--workspace=512` on the Nano as an additional benchmark row
-- [ ] Build a TensorRT engine on the **laptop** too — separate engine from the same
-      ONNX, its own results row
-- [ ] Fix the CUDA context teardown properly in `app/backends.py` — **already
-      written in**, but verify it works on device (see Problem 3)
-- [ ] Re-image the SD card after Part 6, not before
+### 53. Ten-minute 10 W / MAXN thermal run
+
+The sustained baseline used TensorRT FP16 in MAXN with clocks locked and the stock thermal governor left active:
+
+```bash
+sudo nvpmodel -m 0
+sudo jetson_clocks
+
+python3 benchmarks/benchmark.py \
+  --runtime tensorrt \
+  --precision fp16 \
+  --duration 600 \
+  --host-profile jetson-10w-clocks-locked-fan-auto \
+  --clocks-locked true \
+  --fan auto \
+  --deployment bare-metal \
+  --notes "10min thermal 10W"
+```
+
+Run ID: `6348178c575d`
+
+| Metric | Result |
+|---|---:|
+| Frames | 7,512 |
+| FPS first 60 s | 12.61 |
+| FPS last 60 s | 12.49 |
+| First-to-last degradation | −0.94% |
+| GPU temperature | 33.0 → 45.0 °C |
+| Maximum GPU temperature | 50.0 °C |
+
+At 50.0 °C the stock thermal governor engaged the fan at PWM 80. The GPU then cooled toward 45 °C while inference continued without a large throughput drop.
+
+---
+
+### 54. Ten-minute 5 W run
+
+Switch power mode:
+
+```bash
+sudo nvpmodel -m 1
+sudo nvpmodel -q
+```
+
+Output:
+
+```text
+NVPM WARN: fan mode is not set!
+NV Power Mode: 5W
+1
+```
+
+The warning is non-blocking. The sustained 5 W run recorded `clocks_locked=false`:
+
+```bash
+python3 benchmarks/benchmark.py \
+  --runtime tensorrt \
+  --precision fp16 \
+  --duration 600 \
+  --host-profile jetson-5w-fan-auto \
+  --clocks-locked false \
+  --fan auto \
+  --deployment bare-metal \
+  --notes "10min thermal 5W"
+```
+
+Run ID: `585939e8ae8b`
+
+| Metric | Result |
+|---|---:|
+| Cold start | 13,865.0 ms |
+| Capture | 8.96 ms |
+| Preprocess | 21.21 ms |
+| Inference | 72.19 ms |
+| Postprocess + NMS | 14.82 ms |
+| Engine p50 / p95 | 72.14 / 73.06 ms |
+| End-to-end p50 / p95 | 116.03 / 124.23 ms |
+| Engine FPS | 13.85 |
+| End-to-end FPS | 8.53 |
+| FPS first 60 s | 8.65 |
+| FPS last 60 s | 8.46 |
+| First-to-last degradation | −2.11% |
+| Peak process memory | 1074.8 MB |
+| Maximum GPU temperature | 44.5 °C |
+
+The fan remained at zero throughout the run.
+
+---
+
+### 55. Generate the thermal report on the laptop
+
+`matplotlib` is intentionally not required on the Nano. Raw benchmark data is generated on-device; reporting stays on the laptop.
+
+```bash
+python benchmarks/make_report.py --run 585939e8ae8b
+```
+
+Output:
+
+```text
+wrote results\plots\thermal_585939e8ae8b.png
+
+tensorrt fp16 @ 5W  [585939e8ae8b]
+  frames          : 5118 over 600 s
+  FPS first 60 s  : 8.65
+  FPS last 60 s   : 8.46
+  degradation     : -2.11%
+  GPU temp        : 34.0 -> 44.5 C
+```
+
+The matching 10 W report is:
+
+```text
+results/plots/thermal_6348178c575d.png
+```
+
+---
+
+### 56. Sustained operating-point comparison
+
+The measured last-60-second throughputs were:
+
+```text
+10 W operating point: 12.49 FPS
+ 5 W operating point:  8.46 FPS
+```
+
+The 5 W run retained:
+
+```text
+8.46 / 12.49 = 67.7%
+```
+
+of the sustained throughput of the recorded 10 W run.
+
+Using the configured `nvpmodel` envelopes:
+
+```text
+10 W: 12.49 / 10 = 1.249 nominal FPS/W
+ 5 W:  8.46 /  5 = 1.692 nominal FPS/W
+```
+
+The 5 W operating point therefore delivered **35.5% higher throughput per configured watt** in these measurements.
+
+Two qualifications are important:
+
+1. `nvpmodel`'s 5 W and 10 W values are configured power envelopes, not measured board or wall power. This is **nominal FPS/W**, not true electrical energy efficiency.
+2. The recorded clock policies differ: the 10 W run used `jetson_clocks`, while the 5 W run recorded `clocks_locked=false`. This is therefore a comparison of the two measured deployment operating points, not an isolated causal test of `nvpmodel` mode alone.
+
+Thermally, the 10 W operating point reached 50.0 °C and triggered the stock fan governor. The 5 W operating point peaked at 44.5 °C and never triggered the fan.
+
+**Part 7 complete.**
+
+---
+
+## Next
+
+- [ ] **Part 8:** lightweight inference service / structured detection sink
+- [ ] **Part 9:** monitoring, systemd watchdog and resilience
+- [ ] **Part 10:** CI accuracy regression gate, documentation cleanup and v1.0 release

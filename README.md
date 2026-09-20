@@ -4,15 +4,15 @@
 
 EdgeVision takes an object detector from a PyTorch checkpoint to an optimized TensorRT deployment on an **NVIDIA Jetson Nano 2GB**, with latency, accuracy, memory, container overhead and thermal behavior measured along the way.
 
+<img src="assets/Jetson_Nano.jpg" width="480" alt="The Jetson Nano 2GB used for this project">
+
+*The Jetson Nano 2GB Developer Kit used for every on-device measurement in this project.*
+
 **TensorRT FP16 runs 1.84× faster than TorchScript FP32 on the same board, with an absolute mAP@50-95 change of 0.0001 (~0.03% relative) on the full 5,000-image COCO val2017 set.**
 
 ![TensorRT FP16 vs TorchScript FP32 on Jetson Nano](assets/demo_comparison.gif)
 
 *TorchScript FP32 (top) vs TensorRT FP16 (bottom). Same model, video and Jetson Nano 2GB at 10 W with clocks locked. The counters show end-to-end throughput; playback is 2× real speed.*
-
-<img src="assets/Jetson_Nano.jpg" width="480" alt="The Jetson Nano 2GB used for this project">
-
-*The Jetson Nano 2GB Developer Kit used for every on-device measurement in this project.*
 
 ---
 

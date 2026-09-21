@@ -572,7 +572,7 @@ See [`results/README.md`](results/README.md) for the result schema and run-level
 
 ## Roadmap
 
-**Completed**
+**Done with these:**
 - runtime benchmarking
 - TensorRT FP32 and FP16 deployment
 - full COCO val2017 accuracy evaluation
@@ -584,11 +584,11 @@ See [`results/README.md`](results/README.md) for the result schema and run-level
 - GitHub Actions CI with Python syntax checks and accuracy regression gate
 - v1.0 release scope
 
-**Optional after v1**
+**Maybe Later**
 - ROS2 detection publishing
 - Prometheus/Grafana monitoring
 
-**Deferred**
+**Opted out**
 - cross-hardware model comparison
 - object tracking
 - transformer feasibility study on Maxwell

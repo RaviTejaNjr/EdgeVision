@@ -588,7 +588,7 @@ See [`results/README.md`](results/README.md) for the result schema and run-level
 - ROS2 detection publishing
 - Prometheus/Grafana monitoring
 
-**Opted out**
+**Future Scope**
 - cross-hardware model comparison
 - object tracking
 - transformer feasibility study on Maxwell
